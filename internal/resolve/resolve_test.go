@@ -10,6 +10,11 @@ func TestClassify(t *testing.T) {
 		{"-1001234567890", "id", "-1001234567890"},
 		{"+79991234567", "phone", "79991234567"},
 		{"Alice Smith", "name", "Alice Smith"},
+		{"me", "self", ""},
+		{"self", "self", ""},
+		{"saved", "self", ""},
+		{"Saved Messages", "self", ""},
+		{"ME", "self", ""},
 	}
 	for _, c := range cases {
 		kind, val := Classify(c.in)

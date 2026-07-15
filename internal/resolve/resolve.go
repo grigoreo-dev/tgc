@@ -27,9 +27,13 @@ type Peer struct {
 
 var phoneRe = regexp.MustCompile(`^\+[0-9]{7,15}$`)
 
-// Classify determines the selector kind: id, username, phone or name.
+// Classify determines the selector kind: self, id, username, phone or name.
 func Classify(s string) (kind, value string) {
 	s = strings.TrimSpace(s)
+	switch strings.ToLower(s) {
+	case "me", "self", "saved", "saved messages":
+		return "self", ""
+	}
 	if strings.HasPrefix(s, "@") {
 		return "username", strings.TrimPrefix(s, "@")
 	}
@@ -65,6 +69,12 @@ func FuzzyMatch(peers []Peer, query string) []Peer {
 func Resolve(conn *client.Conn, selector string) (*Peer, error) {
 	kind, val := Classify(selector)
 	switch kind {
+	case "self":
+		p := peerFromUser(conn.Client.Self)
+		if p == nil {
+			return nil, output.Errf("not_authenticated", "cannot resolve %q: not logged in", selector)
+		}
+		return p, nil
 	case "id":
 		id, _ := strconv.ParseInt(val, 10, 64)
 		return resolveByID(conn, id)
