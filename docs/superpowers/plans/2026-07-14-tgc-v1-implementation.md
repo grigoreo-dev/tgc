@@ -21,6 +21,12 @@
 - Все list-команды имеют `--limit`.
 - Селектор чата единый во всех командах: `@username` | ID | телефон | fuzzy-имя.
 - FLOOD_WAIT ≤ 30с — ждать прозрачно (floodwait.Waiter); больше — ошибка `{"error":"flood_wait","retry_after":X}`.
+- **gotd pin:** stay on whatever gotgproto pulls (currently `gotd/td v0.153.0`, Layer 227). Before Task 8, one optional bump of **gotd only** to latest; gate = `go build ./... && go test ./...`; on failure roll back to 0.153. Do **not** bump gotgproto unless blocked. RichMessage types already exist in 0.153 — no upgrade required for Task 11.
+- **bot_unsupported preflight (profile type `bot`):** fail before RPC with `{"error":"bot_unsupported",...}` for: `chats` (dialogs), `search` without `--messages` (contacts/dialogs), phone resolve, fuzzy-name resolve. Allowed: auth*, send/edit/delete/forward/download, read/context, info by `@username`|id, members (channel peers), `search --messages`, resolve `@username`|id. Reactive `WrapErr(BOT_METHOD_INVALID)` remains a safety net (do **not** map broad `*_INVALID`).
+- **Session security:** export/import write files `0600`; never log session strings; README warns sessions = account credentials; no encryption-at-rest in v1.
+- **Media defaults (Task 10):** images (jpg/png/webp/gif) send as **photo** by default; `--as-document` forces document. Album max 10 → `bad_args` if more; mixed types → pass API error through. Download default path: `$TGC_DOWNLOAD_DIR` if set, else `~/.tgc/downloads/<file_id>/<original_filename>` (photo id for photos); `-o` overrides (file or dir); conflicts → `uniquePath`; `--stdout` = raw bytes.
+- **read pagination:** `--after N` → `getHistory.MinID=N`; `--before N` → `MaxID=N` (+ `OffsetID=N` when used as cursor). One RPC = one page. No AddOffset hack.
+- **Task 13 live integration is required** to close v1: use `.env` (`TGC_API_ID`/`TGC_API_HASH`/`TGC_BOT_TOKEN`) + interactive user-bot login when needed. Never commit or log secrets.
 - Каждый коммит — работающее состояние: `go build ./... && go vet ./... && go test ./...` зелёные.
 - **Язык репозитория tgc — строго английский**: код, комментарии, тесты, коммиты (conventional commits), README, docs/, тексты ошибок и help CLI. Единственное исключение — `README.ru.md` (русская версия README, добавляется в Task 13). Никакого русского в идентификаторах, строках, фикстурах тестов.
 - **Git workflow: main защищён, все изменения — только через PR.** Каждая задача выполняется в ветке `task/<N>-<slug>`; в конце: push → `gh pr create --fill` → `gh pr merge --squash --auto --delete-branch` (мержится автоматически после зелёного CI) → `git checkout main && git pull`. Прямой пуш в main запрещён (единственное исключение — бутстрап-коммит Task 1 до включения защиты ветки).
@@ -1977,7 +1983,7 @@ git checkout main && git pull
 - Consumes: `client.Conn`, `resolve.Resolve/InputPeer`, `output.*`.
 - Produces:
   - `type ops.ReadOpts struct { Limit int; BeforeID, AfterID int; Since, Until string; From string; Search string }` (Since/Until — `YYYY-MM-DD` или RFC3339)
-  - `ops.Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, error)` — сообщения новые-сверху. Пути: `Search != ""` → `messages.search` с `InputMessagesFilterEmpty` + Q; `From != ""` → `messages.search` с `FromID`; иначе `messages.getHistory` (OffsetID для before, смещения для after, OffsetDate из Until; фильтрация по Since на клиенте с остановкой пагинации).
+  - `ops.Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, error)` — сообщения новые-сверху. Пути: `Search != ""` → `messages.search` с `InputMessagesFilterEmpty` + Q; `From != ""` → `messages.search` с `FromID`; иначе `messages.getHistory` (`MaxID`/`OffsetID` for `--before`, `MinID` for `--after`, OffsetDate from Until; client-side Since filter only).
   - `ops.Context(conn *client.Conn, selector string, msgID, radius int) ([]map[string]any, error)` — `getHistory` с `OffsetID: msgID+radius+1, Limit: radius*2+1`.
   - `ops.messageToMap(m *tg.Message, users map[int64]*tg.User, chats map[int64]tg.ChatClass, chatID int64) map[string]any` — контракт полей: `id, chat_id, sender_id, sender_name, sender_username, date` (RFC3339), `text, reply_to` (id|null), `media` (`{type,file_name,size,mime}`|null), `edited` (bool), `fwd_from` (string|null). Отправители — только из users/chats, приложенных к ответу API, без дорезолвов.
   - `ops.ParseDateArg(s string) (time.Time, error)` — экспортируемая (тестируется напрямую).
@@ -2155,15 +2161,14 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 		}
 		return collectMessages(res, peer.ID, sinceT), nil
 	default:
+		// Stress-test: use native MinID/MaxID (not AddOffset hack). One RPC = one page.
 		req := &tg.MessagesGetHistoryRequest{Peer: ip, Limit: o.Limit}
 		if o.BeforeID > 0 {
 			req.OffsetID = o.BeforeID
+			req.MaxID = o.BeforeID
 		}
 		if o.AfterID > 0 {
-			// getHistory returns messages older than offset; for "after" use
-			// AddOffset trick: offset_id=AfterID, add_offset=-limit, then filter.
-			req.OffsetID = o.AfterID
-			req.AddOffset = -o.Limit
+			req.MinID = o.AfterID
 		}
 		if o.Until != "" {
 			t, err := ParseDateArg(o.Until)
@@ -2176,17 +2181,7 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 		if err != nil {
 			return nil, client.WrapErr(err)
 		}
-		msgs := collectMessages(res, peer.ID, sinceT)
-		if o.AfterID > 0 { // drop anything at or before the boundary
-			var out []map[string]any
-			for _, m := range msgs {
-				if id, _ := m["id"].(int); id > o.AfterID {
-					out = append(out, m)
-				}
-			}
-			msgs = out
-		}
-		return msgs, nil
+		return collectMessages(res, peer.ID, sinceT), nil
 	}
 }
 
@@ -2400,13 +2395,13 @@ import (
 )
 
 var (
-	sendReply   int
-	sendPlain   bool
-	sendFiles   []string
-	sendCaption string
-	sendAsPhoto bool
-	editPlain   bool
-	deleteForMe bool
+	sendReply      int
+	sendPlain      bool
+	sendFiles      []string
+	sendCaption    string
+	sendAsDocument bool
+	editPlain      bool
+	deleteForMe    bool
 )
 
 func textArg(args []string, idx int) (string, error) {
@@ -2433,7 +2428,7 @@ var sendCmd = &cobra.Command{
 
 		if len(sendFiles) > 0 {
 			results, err := ops.SendFiles(conn, args[0], sendFiles, ops.FileOpts{
-				Caption: sendCaption, AsPhoto: sendAsPhoto, ReplyTo: sendReply, Plain: sendPlain,
+				Caption: sendCaption, AsDocument: sendAsDocument, ReplyTo: sendReply, Plain: sendPlain,
 			})
 			if err != nil {
 				return err
@@ -2538,7 +2533,7 @@ func init() {
 	sendCmd.Flags().BoolVar(&sendPlain, "plain", false, "disable Markdown parsing")
 	sendCmd.Flags().StringArrayVar(&sendFiles, "file", nil, "file to send (repeat for album, max 10)")
 	sendCmd.Flags().StringVar(&sendCaption, "caption", "", "caption for file/album")
-	sendCmd.Flags().BoolVar(&sendAsPhoto, "as-photo", false, "send image as compressed photo")
+	sendCmd.Flags().BoolVar(&sendAsDocument, "as-document", false, "send image as document (default: photo for image/*)")
 	editCmd.Flags().BoolVar(&editPlain, "plain", false, "disable Markdown parsing")
 	deleteCmd.Flags().BoolVar(&deleteForMe, "for-me", false, "delete only for me")
 	rootCmd.AddCommand(sendCmd, editCmd, deleteCmd, forwardCmd)
@@ -2550,10 +2545,10 @@ func init() {
 ```go
 // Package-level stub until media sending lands (Task 10).
 type FileOpts struct {
-	Caption string
-	AsPhoto bool
-	ReplyTo int
-	Plain   bool
+	Caption    string
+	AsDocument bool // force image/* as document; default for images is photo
+	ReplyTo    int
+	Plain      bool
 }
 
 func SendFiles(conn *client.Conn, selector string, files []string, o FileOpts) ([]map[string]any, error) {
@@ -2591,10 +2586,11 @@ git checkout main && git pull
 **Interfaces:**
 - Consumes: `github.com/gotd/td/telegram/uploader`, `github.com/gotd/td/telegram/downloader`, `markup.Parse`, `resolve.*`.
 - Produces:
-  - `ops.SendFiles(conn, selector string, files []string, o FileOpts) ([]map[string]any, error)` — 1 файл → `messages.sendMedia`; 2–10 → `messages.sendMultiMedia` (album); >10 → ошибка `bad_args` «split into batches of 10». Caption (Markdown) — на первом элементе. Результат — по map на сообщение: `{message_id, chat_id, date, grouped_id?}`.
-  - `ops.Download(conn *client.Conn, selector string, msgID int, outPath string, toStdout bool) (map[string]any, error)` → `{path, size, mime, file_name}`; `toStdout` — байты в stdout, JSON не печатается (это делает CLI-слой).
-  - `ops.classifyUpload(path string, asPhoto bool) (kind string, mime string)` — kind: `photo|video|audio|document` по расширению/mime; `asPhoto` форсирует `photo` для image/*.
+  - `ops.SendFiles(conn, selector string, files []string, o FileOpts) ([]map[string]any, error)` — 1 файл → `messages.sendMedia`; 2–10 → `messages.sendMultiMedia` (album); >10 → ошибка `bad_args` «split into batches of 10». Caption (Markdown) — на первом элементе. Результат — по map на сообщение: `{message_id, chat_id, date, grouped_id?}`. Images default to photo; `FileOpts.AsDocument` forces document.
+  - `ops.Download(conn *client.Conn, selector string, msgID int, outPath string, toStdout bool) (map[string]any, error)` → `{path, size, mime, file_name}`; `toStdout` — байты в stdout, JSON не печатается (это делает CLI-слой). Default path when `outPath==""`: `filepath.Join(downloadRoot(), fileID, originalName)` where `downloadRoot()` = `TGC_DOWNLOAD_DIR` or `~/.tgc/downloads`.
+  - `ops.classifyUpload(path string, asDocument bool) (kind string, mime string)` — kind: `photo|video|audio|document`; image/* → `photo` unless `asDocument`.
   - `ops.uniquePath(path string) string` — если файл существует, добавляет ` (1)`, ` (2)`...
+  - `ops.downloadRoot() string` — `TGC_DOWNLOAD_DIR` if set, else `filepath.Join(home, ".tgc", "downloads")`.
 
 - [ ] **Step 1: Написать падающие тесты чистых функций**
 
@@ -2611,21 +2607,21 @@ import (
 
 func TestClassifyUpload(t *testing.T) {
 	cases := []struct {
-		path    string
-		asPhoto bool
-		kind    string
+		path       string
+		asDocument bool
+		kind       string
 	}{
-		{"pic.jpg", true, "photo"},
-		{"pic.jpg", false, "document"}, // images are documents unless --as-photo
+		{"pic.jpg", false, "photo"},    // images are photos by default
+		{"pic.jpg", true, "document"},  // --as-document forces document
 		{"clip.mp4", false, "video"},
 		{"song.mp3", false, "audio"},
 		{"report.pdf", false, "document"},
-		{"data.bin", true, "document"}, // as-photo has no effect on non-images
+		{"data.bin", true, "document"}, // as-document has no effect on non-images
 	}
 	for _, c := range cases {
-		kind, _ := classifyUpload(c.path, c.asPhoto)
+		kind, _ := classifyUpload(c.path, c.asDocument)
 		if kind != c.kind {
-			t.Errorf("classifyUpload(%q, %v) = %q, want %q", c.path, c.asPhoto, kind, c.kind)
+			t.Errorf("classifyUpload(%q, %v) = %q, want %q", c.path, c.asDocument, kind, c.kind)
 		}
 	}
 }
@@ -2685,10 +2681,10 @@ import (
 	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
 
-func classifyUpload(path string, asPhoto bool) (string, string) {
+func classifyUpload(path string, asDocument bool) (string, string) {
 	m := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
 	switch {
-	case asPhoto && strings.HasPrefix(m, "image/"):
+	case strings.HasPrefix(m, "image/") && !asDocument:
 		return "photo", m
 	case strings.HasPrefix(m, "video/"):
 		return "video", m
@@ -2700,6 +2696,14 @@ func classifyUpload(path string, asPhoto bool) (string, string) {
 		}
 		return "document", m
 	}
+}
+
+func downloadRoot() string {
+	if d := os.Getenv("TGC_DOWNLOAD_DIR"); d != "" {
+		return d
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".tgc", "downloads")
 }
 
 func uniquePath(p string) string {
@@ -2719,7 +2723,7 @@ func uniquePath(p string) string {
 
 `SendFiles`: валидация count (≤10, иначе `output.Errf("bad_args", "too many files: %d (max 10 per album); split into batches", n)`) — **до** использования conn (тест зовёт с nil). Один файл: `uploader.NewUploader(conn.Ctx.Raw).FromPath(ctx, path)` → собери `tg.InputMediaUploadedPhoto` (kind photo) или `tg.InputMediaUploadedDocument` (+ `DocumentAttributeFilename`, MimeType; для video добавь `DocumentAttributeVideo{SupportsStreaming: true}`) → `MessagesSendMedia` с caption через `markup.Parse`. Альбом: для каждого файла после аплоада вызови `MessagesUploadMedia` (превращает uploaded в готовый `MessageMediaPhoto/Document` — обязательный шаг для `sendMultiMedia`), собери `[]tg.InputSingleMedia` (caption+entities только у первой), отправь `MessagesSendMultiMedia`. Результаты — из Updates (переиспользуй/обобщи `sentResult`; для мультимедиа собери все `UpdateNewMessage` и добавь `grouped_id`).
 
-`Download`: найди сообщение — `MessagesGetHistory{OffsetID: msgID+1, Limit: 1}` для обычных чатов даёт сообщение msgID, надёжнее: `ChannelsGetMessages`/`MessagesGetMessages` по ID (для channel-peer — первый, иначе второй). Из media построй location: photo → `tg.InputPhotoFileLocation` (максимальный size-тип), document → `tg.InputDocumentFileLocation`. Скачивание: `downloader.NewDownloader().Download(conn.Ctx.Raw, loc).ToPath(ctx, path)` / `.Stream(ctx, os.Stdout)` для stdout. Имя по умолчанию: `file_name` из атрибутов документа, для фото — `photo_<msgID>.jpg`. `-o` директория → джойн с именем; конфликт имён → `uniquePath`. Нет media в сообщении → `output.Errf("no_media", "message %d has no downloadable media", msgID)`.
+`Download`: найди сообщение — `ChannelsGetMessages`/`MessagesGetMessages` по ID (для channel-peer — первый, иначе второй). Из media построй location: photo → `tg.InputPhotoFileLocation` (максимальный size-тип), document → `tg.InputDocumentFileLocation`. Скачивание: `downloader.NewDownloader().Download(conn.Ctx.Raw, loc).ToPath(ctx, path)` / `.Stream(ctx, os.Stdout)` для stdout. Default when `-o` empty: `~/.tgc/downloads/<file_id>/<original_filename>` (`file_id` = document/photo id; original name from attributes, photos → `photo_<msgID>.jpg` if unnamed). Override root with `TGC_DOWNLOAD_DIR`. `-o` file or directory overrides fully; mkdir 0700 as needed; name conflicts → `uniquePath`. Нет media → `output.Errf("no_media", "message %d has no downloadable media", msgID)`.
 
 - [ ] **Step 4: Реализовать cli/download.go**
 
@@ -2766,7 +2770,7 @@ var downloadCmd = &cobra.Command{
 }
 
 func init() {
-	downloadCmd.Flags().StringVarP(&downloadOut, "out", "o", "", "output file or directory (default: CWD, original name)")
+	downloadCmd.Flags().StringVarP(&downloadOut, "out", "o", "", "output file or directory (default: ~/.tgc/downloads/<file_id>/<name>)")
 	downloadCmd.Flags().BoolVar(&downloadStdout, "stdout", false, "write raw bytes to stdout")
 	rootCmd.AddCommand(downloadCmd)
 }
@@ -2793,75 +2797,45 @@ git checkout main && git pull
 
 ---
 
-### Task 11: RichMessage — спайк доступности + транслятор + интеграция в send
+### Task 11: RichMessage — InputRichMessageMarkdown + fallback + `--rich`
 
-RichMessage (Bot API 10.1, июнь 2026) — блочный формат. Первая часть задачи — **спайк**: выяснить, есть ли в текущем слое gotd (layer ≥ 227) TL-типы rich-сообщений и доступны ли они user-аккаунтам. Итог спайка определяет объём остальной части.
+**Stress-test decision:** gotd v0.153 (Layer 227) already has `InputRichMessageMarkdown`, `InputRichMessageHTML`, `InputRichMessage` (PageBlock), and `messages.sendMessage.rich_message`. Do **not** build a custom PageBlock tree in v1. Prefer server-side Markdown constructor; fall back to Task 6 entities if the server rejects rich.
 
 **Files:**
-- Create: `projects/tgc/internal/markup/rich.go`, `projects/tgc/internal/markup/rich_test.go`
-- Modify: `projects/tgc/internal/ops/messages.go` (SendText — путь RichMessage), `projects/tgc/internal/cli/send.go` (флаг `--rich`)
+- Create: `projects/tgc/internal/markup/rich.go`, `projects/tgc/internal/markup/rich_test.go`, `projects/tgc/docs/rich-spike.md`
+- Modify: `projects/tgc/internal/ops/messages.go` (SendText rich path), `projects/tgc/internal/cli/send.go` (`--rich`)
 
 **Interfaces:**
 - Produces:
-  - `markup.SupportsRich(conn *client.Conn) bool` — фича-детект: тип профиля (bot) + наличие TL-типов в слое.
-  - `markup.ParseRich(md string) (*RichDoc, error)` — Markdown → промежуточное блочное дерево `RichDoc` (`[]RichBlock`: paragraph, heading, list, table, pre, quote, divider).
-  - `markup.RichToTL(doc *RichDoc) (any, error)` — конверсия в TL-объекты фактического слоя (тип уточняется по результату спайка).
-  - `ops.SendOpts` дополняется полем `RichJSON string` (сырой JSON для `--rich`).
-  - Поведение SendText: bot-профиль + блочный Markdown (есть заголовки/таблицы/списки) + `SupportsRich` → отправка RichMessage; иначе — фолбэк на entities (Task 6). `--rich` — отправка переданной структуры без транслятора.
+  - `markup.TryRichMarkdown(md string) tg.InputRichMessageClass` — returns `&tg.InputRichMessageMarkdown{Markdown: md}` (or HTML path if we choose it); no custom AST required in v1.
+  - `ops.SendOpts` gains `RichJSON string` (expert `--rich` payload) and uses rich when Markdown has block structure **or** when sending default Markdown if a prior probe/session flag says rich works.
+  - SendText path: (1) if `RichJSON != ""` → decode JSON into `InputRichMessageClass` (markdown/html/blocks forms); (2) else if not plain → try `req.SetRichMessage(InputRichMessageMarkdown{Markdown: text})` with empty `Message` or message+rich per TL; on RPC failure indicating unsupported → retry with entities fallback from Task 6; (3) plain → entities-free string.
+  - User and bot both attempt rich; if user-layer rejects, transparent entities fallback (no error). Document outcome in `docs/rich-spike.md` after first live probe in Task 13 (spike notes from module inspection go there in this task).
 
-- [ ] **Step 1: Спайк — проверить наличие TL-типов**
+- [ ] **Step 1: Spike notes from module (already verified in stress-test)**
 
 ```bash
 cd /root/workspace/projects/tgc
-go doc github.com/gotd/td/tg 2>/dev/null | grep -ci rich
-go doc github.com/gotd/td/tg | grep -i 'rich' | head -30
-grep -ri "richMessage\|textBold\|pageBlock" $(go env GOMODCACHE)/github.com/gotd/td*/tg/tl_registry_gen.go 2>/dev/null | head -5
+grep -n 'InputRichMessageMarkdown\|SetRichMessage' $(go env GOMODCACHE)/github.com/gotd/td@*/tg/tl_input_rich_message_gen.go $(go env GOMODCACHE)/github.com/gotd/td@*/tg/tl_messages_send_message_gen.go | head -20
+# Layer constant:
+grep -n 'const Layer' $(go env GOMODCACHE)/github.com/gotd/td@*/tg/tl_registry_gen.go | head -3
 ```
 
-Задокументируй результат в `projects/tgc/docs/rich-spike.md` (создай): какие типы есть (`tg.RichText*`? `tg.PageBlock*`? `messages.sendRichMessage`?), доступны ли они не-ботам, какой request отправляет rich-контент. **Если типов в слое нет** — RichMessage в v1 сокращается до: `--rich` возвращает ошибку `not_supported` с пояснением, весь Markdown идёт через entities-фолбэк; остальные шаги задачи выполняются (ParseRich/RichDoc нужны как транслятор-каркас), кроме RichToTL/интеграции реальной отправки.
+Write `projects/tgc/docs/rich-spike.md`: types present (`InputRichMessageMarkdown/HTML`, `rich_message` flag on send/edit), Layer 227, decision = use Markdown constructor + entities fallback; no custom PageBlock translator in v1.
 
-- [ ] **Step 2: Написать падающие тесты транслятора (не зависят от TL)**
+- [ ] **Step 2: Unit tests for rich helpers**
 
 `projects/tgc/internal/markup/rich_test.go`:
 
 ```go
 package markup
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
 
-func TestParseRichBlocks(t *testing.T) {
-	doc, err := ParseRich("# Title\n\npara text\n\n- a\n- b\n\n```go\ncode\n```")
-	if err != nil {
-		t.Fatal(err)
-	}
-	kinds := make([]string, len(doc.Blocks))
-	for i, b := range doc.Blocks {
-		kinds[i] = b.Kind
-	}
-	want := []string{"heading", "paragraph", "list", "pre"}
-	if len(kinds) != len(want) {
-		t.Fatalf("kinds: %v", kinds)
-	}
-	for i := range want {
-		if kinds[i] != want[i] {
-			t.Fatalf("block %d: got %q want %q (all: %v)", i, kinds[i], want[i], kinds)
-		}
-	}
-}
-
-func TestParseRichTable(t *testing.T) {
-	doc, err := ParseRich("| a | b |\n|---|---|\n| 1 | 2 |")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Blocks) != 1 || doc.Blocks[0].Kind != "table" {
-		t.Fatalf("blocks: %+v", doc.Blocks)
-	}
-	tb := doc.Blocks[0]
-	if len(tb.Rows) != 2 || len(tb.Rows[0]) != 2 || tb.Rows[1][1] != "2" {
-		t.Fatalf("table rows: %+v", tb.Rows)
-	}
-}
+	"github.com/gotd/td/tg"
+)
 
 func TestHasBlockContent(t *testing.T) {
 	if HasBlockContent("just plain text") {
@@ -2874,153 +2848,102 @@ func TestHasBlockContent(t *testing.T) {
 		t.Fatal("table is block content")
 	}
 }
+
+func TestTryRichMarkdown(t *testing.T) {
+	rm := TryRichMarkdown("# Hi\n\nbody")
+	md, ok := rm.(*tg.InputRichMessageMarkdown)
+	if !ok || md.Markdown != "# Hi\n\nbody" {
+		t.Fatalf("got %#v", rm)
+	}
+}
+
+func TestParseRichJSONMarkdown(t *testing.T) {
+	raw := `{"type":"markdown","markdown":"# x"}`
+	rm, err := ParseRichJSON(json.RawMessage(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rm.(*tg.InputRichMessageMarkdown); !ok {
+		t.Fatalf("want markdown constructor, got %T", rm)
+	}
+}
 ```
 
-- [ ] **Step 3: Запустить — падают**
+- [ ] **Step 3: Run — fail**
 
-Run: `cd /root/workspace/projects/tgc && go test ./internal/markup/ -run Rich`
+Run: `cd /root/workspace/projects/tgc && go test ./internal/markup/ -run 'HasBlock|TryRich|ParseRichJSON'`
 Expected: FAIL.
 
-- [ ] **Step 4: Реализовать rich.go**
+- [ ] **Step 4: Implement rich.go (no PageBlock AST)**
 
 ```go
 package markup
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
 
-// RichDoc is an intermediate block tree between Markdown and Telegram's
-// RichMessage TL objects. It stays TL-agnostic so the translator is testable
-// without a Telegram connection.
-type RichDoc struct {
-	Blocks []RichBlock
-}
+	"github.com/gotd/td/tg"
 
-type RichBlock struct {
-	Kind  string     // heading | paragraph | list | pre | quote | table | divider
-	Level int        // heading level
-	Text  string     // heading/paragraph/quote/pre content (markdown inline kept)
-	Lang  string     // pre language
-	Items []string   // list items
-	Rows  [][]string // table rows (first row = header)
-}
+	"github.com/grigoreo-dev/tgc/internal/output"
+)
 
-// HasBlockContent reports whether md contains block-level markup that would
-// benefit from RichMessage rendering (headings, tables, lists, fences).
+// HasBlockContent reports whether md has block-level markup (headings/tables/lists/fences/quotes).
 func HasBlockContent(md string) bool {
 	for _, line := range strings.Split(md, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "|") ||
-			strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") ||
-			strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "> ") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "#") || strings.HasPrefix(t, "|") ||
+			strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") ||
+			strings.HasPrefix(t, "```") || strings.HasPrefix(t, "> ") {
 			return true
 		}
 	}
 	return false
 }
 
-// ParseRich converts Markdown into a RichDoc block tree.
-func ParseRich(md string) (*RichDoc, error) {
-	doc := &RichDoc{}
-	lines := strings.Split(md, "\n")
-	i := 0
-	for i < len(lines) {
-		line := strings.TrimRight(lines[i], " ")
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case trimmed == "":
-			i++
-		case strings.HasPrefix(trimmed, "```"):
-			lang := strings.TrimPrefix(trimmed, "```")
-			var code []string
-			i++
-			for i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
-				code = append(code, lines[i])
-				i++
-			}
-			i++
-			doc.Blocks = append(doc.Blocks, RichBlock{Kind: "pre", Lang: lang, Text: strings.Join(code, "\n")})
-		case strings.HasPrefix(trimmed, "#"):
-			level := len(trimmed) - len(strings.TrimLeft(trimmed, "#"))
-			doc.Blocks = append(doc.Blocks, RichBlock{
-				Kind: "heading", Level: level,
-				Text: strings.TrimSpace(strings.TrimLeft(trimmed, "#")),
-			})
-			i++
-		case strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* "):
-			var items []string
-			for i < len(lines) {
-				t := strings.TrimSpace(lines[i])
-				if !strings.HasPrefix(t, "- ") && !strings.HasPrefix(t, "* ") {
-					break
-				}
-				items = append(items, t[2:])
-				i++
-			}
-			doc.Blocks = append(doc.Blocks, RichBlock{Kind: "list", Items: items})
-		case strings.HasPrefix(trimmed, "|"):
-			var rows [][]string
-			for i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "|") {
-				row := strings.TrimSpace(lines[i])
-				if isTableSeparator(row) {
-					i++
-					continue
-				}
-				cells := strings.Split(strings.Trim(row, "|"), "|")
-				for j := range cells {
-					cells[j] = strings.TrimSpace(cells[j])
-				}
-				rows = append(rows, cells)
-				i++
-			}
-			doc.Blocks = append(doc.Blocks, RichBlock{Kind: "table", Rows: rows})
-		case strings.HasPrefix(trimmed, "> "):
-			doc.Blocks = append(doc.Blocks, RichBlock{Kind: "quote", Text: strings.TrimPrefix(trimmed, "> ")})
-			i++
-		case trimmed == "---":
-			doc.Blocks = append(doc.Blocks, RichBlock{Kind: "divider"})
-			i++
-		default:
-			// Merge consecutive plain lines into one paragraph.
-			var para []string
-			for i < len(lines) {
-				t := strings.TrimSpace(lines[i])
-				if t == "" || strings.HasPrefix(t, "#") || strings.HasPrefix(t, "|") ||
-					strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") ||
-					strings.HasPrefix(t, "```") || strings.HasPrefix(t, "> ") || t == "---" {
-					break
-				}
-				para = append(para, t)
-				i++
-			}
-			doc.Blocks = append(doc.Blocks, RichBlock{Kind: "paragraph", Text: strings.Join(para, "\n")})
-		}
-	}
-	return doc, nil
+// TryRichMarkdown wraps Markdown in InputRichMessageMarkdown for sendMessage.rich_message.
+func TryRichMarkdown(md string) tg.InputRichMessageClass {
+	return &tg.InputRichMessageMarkdown{Markdown: md}
 }
 
-func isTableSeparator(row string) bool {
-	inner := strings.Trim(row, "|")
-	for _, c := range inner {
-		if c != '-' && c != ':' && c != ' ' && c != '|' {
-			return false
-		}
+// ParseRichJSON decodes expert --rich payload:
+//   {"type":"markdown","markdown":"..."} | {"type":"html","html":"..."} | {"type":"blocks",...}
+func ParseRichJSON(raw json.RawMessage) (tg.InputRichMessageClass, error) {
+	var head struct {
+		Type     string `json:"type"`
+		Markdown string `json:"markdown"`
+		HTML     string `json:"html"`
 	}
-	return true
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return nil, output.Errf("bad_args", "invalid --rich JSON: %v", err)
+	}
+	switch strings.ToLower(head.Type) {
+	case "markdown", "md", "":
+		if head.Markdown == "" {
+			return nil, output.Errf("bad_args", "--rich markdown payload requires markdown field")
+		}
+		return &tg.InputRichMessageMarkdown{Markdown: head.Markdown}, nil
+	case "html":
+		if head.HTML == "" {
+			return nil, output.Errf("bad_args", "--rich html payload requires html field")
+		}
+		return &tg.InputRichMessageHTML{HTML: head.HTML}, nil
+	default:
+		return nil, output.Errf("bad_args", "unsupported --rich type %q (markdown|html)", head.Type)
+	}
 }
 ```
 
-- [ ] **Step 5: Прогнать тесты транслятора**
+- [ ] **Step 5: Tests pass**
 
-Run: `cd /root/workspace/projects/tgc && go test ./internal/markup/ -run Rich -v`
+Run: `cd /root/workspace/projects/tgc && go test ./internal/markup/ -run 'HasBlock|TryRich|ParseRichJSON' -v`
 Expected: PASS.
 
-- [ ] **Step 6: RichToTL + интеграция в SendText (по результату спайка)**
+- [ ] **Step 6: Integrate into SendText**
 
-Если спайк подтвердил наличие TL-типов: реализуй `RichToTL` (маппинг heading → SectionHeading, paragraph → Paragraph с inline-entities через `parseInline`, list → List, pre → Preformatted, table → Table, quote → BlockQuotation, divider → Divider) и `SupportsRich` (профиль-тип bot + наличие метода в слое); в `ops.SendText` добавь ветку: `!o.Plain && markup.HasBlockContent(text) && markup.SupportsRich(conn)` → rich-отправка, ошибка от сервера → лог в stderr и фолбэк на entities. В `cli/send.go` добавь `--rich` (string, JSON-структура; при непустом — распарсить и отправить как есть; при недоступности — ошибка `not_supported`).
+In `ops.SendText`: if `o.RichJSON != ""` → `ParseRichJSON` + `req.SetRichMessage(...)`; else if `!o.Plain` → try `SetRichMessage(TryRichMarkdown(text))` (especially when `HasBlockContent(text)`); on RPC failure that indicates unsupported rich → retry with Task 6 entities. CLI: `--rich` string flag. Document live user-account result later in Task 13 (update `docs/rich-spike.md`).
 
-Если спайк показал отсутствие типов: `SupportsRich` возвращает `false`, `--rich` — ошибка `not_supported` с текстом "RichMessage requires a newer MTProto layer; falling back to entities is automatic". Зафиксируй это в `docs/rich-spike.md` и в README.
-
-- [ ] **Step 7: Сборка и все тесты**
+- [ ] **Step 7: Build + all tests**
 
 Run: `cd /root/workspace/projects/tgc && go build ./... && go vet ./... && go test ./...`
 Expected: PASS.
@@ -3030,7 +2953,7 @@ Expected: PASS.
 ```bash
 cd /root/workspace/projects/tgc
 git checkout -b task/11-rich 2>/dev/null || git checkout task/11-rich
-git add -A && git commit -m "feat: RichMessage translator with layer feature-detect and entities fallback"
+git add -A && git commit -m "feat: RichMessage via InputRichMessageMarkdown with entities fallback"
 git push -u origin task/11-rich
 gh pr create --fill
 gh pr merge --squash --auto --delete-branch
@@ -3171,15 +3094,17 @@ Use a throwaway profile dir: `export TGC_CONFIG_DIR=$(mktemp -d)`.
 - [ ] `tgc delete <chat> <id>` — gone for everyone
 
 ## Files
-- [ ] `tgc send <chat> --file photo.jpg --as-photo --caption "**cap**"` — photo with caption
+- [ ] `tgc send <chat> --file photo.jpg --caption "**cap**"` — photo by default with caption
+- [ ] `tgc send <chat> --file photo.jpg --as-document` — image as document
 - [ ] `tgc send <chat> --file a.jpg --file b.jpg` — album (grouped)
 - [ ] `tgc send <chat> --file doc.pdf` — document
-- [ ] `tgc download <chat> <id>` — file in CWD, JSON `{path,size,mime,file_name}`
+- [ ] `tgc download <chat> <id>` — file under `~/.tgc/downloads/<file_id>/<name>`, JSON `{path,size,mime,file_name}`
 - [ ] `tgc download <chat> <id> --stdout > /tmp/out` — bytes match
 - [ ] 11 files → error `bad_args`
 
 ## Bot mode restrictions
-- [ ] `tgc --profile bot chats` — structured `bot_unsupported`-style error (bots can't list dialogs)
+- [ ] `tgc --profile bot chats` — preflight `bot_unsupported` (no dialogs RPC)
+- [ ] `tgc --profile bot search foo` (no --messages) — preflight `bot_unsupported`
 - [ ] `tgc --profile bot send <chat_id> "hi from bot"` — works for a chat the bot is in
 
 ## Contract
@@ -3244,4 +3169,36 @@ Task 1 (scaffold+CI+branch protection)
 ## Verification (весь план)
 
 - Каждая задача: `go build ./... && go vet ./... && go test ./...` зелёные, PR смержен зелёным CI.
-- Финально: живой чек-лист Task 13 пройден, submodule-указатель зафиксирован в meta-репо, документация meta-репо обновлена.
+- Финально: живой чек-лист Task 13 пройден (credentials from `.env` + user-bot login), submodule-указатель зафиксирован в meta-репо, документация meta-репо обновлена.
+
+---
+
+## Stress Test Results: tgc v1 remaining plan (Tasks 8–13)
+
+### Resolved Decisions
+- **RichMessage path:** Use gotd `InputRichMessageMarkdown` / HTML / optional JSON blocks via `--rich`; no custom PageBlock AST in v1; entities fallback on server reject.
+- **gotd version:** Stay on current pin (0.153 / Layer 227); optional gotd-only bump before Task 8 with build+test gate; no forced gotgproto upgrade.
+- **read --after/--before:** Native `MinID`/`MaxID` on `messages.getHistory`; one RPC = one page; drop AddOffset hack.
+- **Session security:** Keep export/import; files `0600`; never log sessions; README warns sessions = passwords; no encryption-at-rest in v1.
+- **bot_unsupported:** Preflight deny-list for bot profile (chats, search without `--messages`, phone/fuzzy resolve) + reactive `BOT_METHOD_INVALID` safety net (not broad `*_INVALID`).
+- **Task order:** Serial 8 → 9 → 10 → 11 → 12 → 13.
+- **Task 13 live:** Required to close v1; use `.env` API/bot tokens + interactive user-bot login; never commit/log secrets.
+- **Media send:** Images default to photo; `--as-document` forces document (replaces plan's `--as-photo` default-document model).
+- **Download path:** `TGC_DOWNLOAD_DIR` or `~/.tgc/downloads/<file_id>/<original_filename>`; `-o` override; `uniquePath` on conflict; `--stdout` raw.
+
+### Changes Made
+- Global Constraints updated with gotd pin, bot preflight, session security, media/download, pagination, live-gate.
+- Task 8 sample code: MinID/MaxID instead of AddOffset.
+- Task 9/10: `--as-document` / `AsDocument`; download default under `~/.tgc/downloads/...`.
+- Task 11 rewritten around InputRichMessageMarkdown (no PageBlock tree).
+- Task 13 checklist aligned with media/bot decisions.
+
+### Deferred / Parking Lot
+- Custom PageBlock tree / `ParseRich` AST — only if server rejects Markdown constructor in live probe.
+- gotgproto upgrade — only if blocked by API gap.
+- Multi-RPC history paginator — out of v1.
+- Session encryption-at-rest — out of v1.
+
+### Confidence Assessment
+- Overall: **High** for Tasks 8–10, 12; **Medium** for Task 11 (server-side rich acceptance for user accounts needs live probe); **High** process for Task 13 given credentials available.
+- Areas of concern: user-account RichMessage acceptance; bot preflight false positives if Telegram expands bot methods — mitigate with narrow deny-list + reactive net.

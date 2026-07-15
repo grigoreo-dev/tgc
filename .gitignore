@@ -9,3 +9,6 @@
 .beads-credential-key
 .beads/proxieddb/
 .worktrees/
+
+.internal/
+.codegraph/
