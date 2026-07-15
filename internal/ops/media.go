@@ -383,6 +383,9 @@ func downloadLocation(media tg.MessageMediaClass, msgID int) (tg.InputFileLocati
 			return nil, mediaMeta{}, output.Errf("no_media", "message %d has no downloadable media", msgID)
 		}
 		sizeType, sizeBytes := largestPhotoSize(photo.Sizes)
+		if sizeType == "" {
+			return nil, mediaMeta{}, output.Errf("no_media", "message %d has no downloadable photo size", msgID)
+		}
 		loc := &tg.InputPhotoFileLocation{
 			ID:            photo.ID,
 			AccessHash:    photo.AccessHash,
@@ -446,15 +449,29 @@ func largestPhotoSize(sizes []tg.PhotoSizeClass) (string, int) {
 	return bestType, bestSize
 }
 
-// documentName returns the document's filename attribute, or a fallback based
-// on msgID when unnamed.
+// sanitizeName reduces a server-supplied filename to a safe base component,
+// preventing path traversal: it strips any directory portion (absolute or
+// relative, including "..") and falls back to a safe default for names that
+// are empty, "." or "..".
+func sanitizeName(raw, fallback string) string {
+	base := filepath.Base(raw)
+	if base == "" || base == "." || base == ".." || base == string(os.PathSeparator) {
+		return fallback
+	}
+	return base
+}
+
+// documentName returns the document's filename attribute (sanitized to a base
+// component to prevent path traversal), or a fallback based on msgID when
+// unnamed.
 func documentName(doc *tg.Document, msgID int) string {
+	fallback := fmt.Sprintf("file_%d", msgID)
 	for _, attr := range doc.Attributes {
 		if fn, ok := attr.(*tg.DocumentAttributeFilename); ok && fn.FileName != "" {
-			return fn.FileName
+			return sanitizeName(fn.FileName, fallback)
 		}
 	}
-	return fmt.Sprintf("file_%d", msgID)
+	return fallback
 }
 
 // resolveDest turns the -o override (empty, file, or directory) plus media

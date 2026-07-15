@@ -3,8 +3,37 @@ package ops
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestSanitizeName(t *testing.T) {
+	const fallback = "file_7"
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"report.pdf", "report.pdf"},              // ordinary name kept
+		{"../../etc/passwd", "passwd"},            // strip traversal, keep base
+		{"/abs/path/x", "x"},                      // strip absolute prefix
+		{"..", fallback},                          // dot-dot alone → fallback
+		{".", fallback},                           // dot alone → fallback
+		{"", fallback},                            // empty → fallback
+		{"../../../../home/user/.ssh/authorized_keys", "authorized_keys"},
+	}
+	for _, c := range cases {
+		got := sanitizeName(c.raw, fallback)
+		if got != c.want {
+			t.Errorf("sanitizeName(%q, %q) = %q, want %q", c.raw, fallback, got, c.want)
+		}
+		if strings.ContainsRune(got, '/') || strings.ContainsRune(got, os.PathSeparator) {
+			t.Errorf("sanitizeName(%q) = %q contains a path separator", c.raw, got)
+		}
+		if got == ".." {
+			t.Errorf("sanitizeName(%q) = %q is a traversal segment", c.raw, got)
+		}
+	}
+}
 
 func TestClassifyUpload(t *testing.T) {
 	cases := []struct {
