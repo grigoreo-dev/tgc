@@ -1,11 +1,14 @@
 package ops
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"time"
 
 	"github.com/gotd/td/tg"
 
 	"github.com/grigoreo-dev/tgc/internal/client"
+	"github.com/grigoreo-dev/tgc/internal/markup"
 	"github.com/grigoreo-dev/tgc/internal/output"
 	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
@@ -293,4 +296,190 @@ func peerID(peer tg.PeerClass) int64 {
 		return p.ChannelID
 	}
 	return 0
+}
+
+// SendOpts controls SendText: reply target and Markdown vs plain parsing.
+type SendOpts struct {
+	ReplyTo int
+	Plain   bool
+}
+
+// parseText converts message text to body + entities, honoring the plain flag.
+func parseText(text string, plain bool) (string, []tg.MessageEntityClass, error) {
+	if plain {
+		return markup.ParsePlain(text)
+	}
+	return markup.Parse(text)
+}
+
+// randomID returns a non-zero cryptographically random int64 for message
+// deduplication (Telegram's random_id).
+func randomID() int64 {
+	var b [8]byte
+	for {
+		if _, err := rand.Read(b[:]); err != nil {
+			// crypto/rand should not fail; fall back to a time-derived seed.
+			return time.Now().UnixNano() | 1
+		}
+		id := int64(binary.LittleEndian.Uint64(b[:]))
+		if id != 0 {
+			return id
+		}
+	}
+}
+
+// sentResult extracts message_id + date from a send/edit/forward update,
+// pairing them with the given chat id in the tgc result shape.
+func sentResult(upd tg.UpdatesClass, chatID int64) map[string]any {
+	res := map[string]any{
+		"message_id": nil,
+		"chat_id":    chatID,
+		"date":       nil,
+	}
+	switch u := upd.(type) {
+	case *tg.UpdateShortSentMessage:
+		res["message_id"] = u.ID
+		res["date"] = time.Unix(int64(u.Date), 0).UTC().Format(time.RFC3339)
+	case *tg.Updates:
+		for _, up := range u.Updates {
+			var mc tg.MessageClass
+			switch nu := up.(type) {
+			case *tg.UpdateNewMessage:
+				mc = nu.Message
+			case *tg.UpdateNewChannelMessage:
+				mc = nu.Message
+			default:
+				continue
+			}
+			if m, ok := mc.(*tg.Message); ok {
+				res["message_id"] = m.ID
+				res["date"] = time.Unix(int64(m.Date), 0).UTC().Format(time.RFC3339)
+				break
+			}
+		}
+	}
+	return res
+}
+
+// SendText sends a text message to selector, applying Markdown unless plain.
+func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]any, error) {
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, err
+	}
+	ip, err := resolve.InputPeer(conn, peer)
+	if err != nil {
+		return nil, err
+	}
+	body, entities, err := parseText(text, o.Plain)
+	if err != nil {
+		return nil, err
+	}
+	req := &tg.MessagesSendMessageRequest{
+		Peer:     ip,
+		Message:  body,
+		RandomID: randomID(),
+	}
+	if len(entities) > 0 {
+		req.SetEntities(entities)
+	}
+	if o.ReplyTo > 0 {
+		req.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: o.ReplyTo})
+	}
+	upd, err := conn.Ctx.Raw.MessagesSendMessage(conn.Ctx, req)
+	if err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return sentResult(upd, peer.ID), nil
+}
+
+// EditText replaces the text of an existing message.
+func EditText(conn *client.Conn, selector string, msgID int, text string, plain bool) (map[string]any, error) {
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, err
+	}
+	ip, err := resolve.InputPeer(conn, peer)
+	if err != nil {
+		return nil, err
+	}
+	body, entities, err := parseText(text, plain)
+	if err != nil {
+		return nil, err
+	}
+	req := &tg.MessagesEditMessageRequest{
+		Peer:    ip,
+		ID:      msgID,
+		Message: body,
+	}
+	if len(entities) > 0 {
+		req.SetEntities(entities)
+	}
+	upd, err := conn.Ctx.Raw.MessagesEditMessage(conn.Ctx, req)
+	if err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return sentResult(upd, peer.ID), nil
+}
+
+// Delete removes messages. For channels it uses channels.deleteMessages (no
+// per-user option); elsewhere messages.deleteMessages with revoke = !forMe.
+func Delete(conn *client.Conn, selector string, ids []int, forMe bool) (map[string]any, error) {
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, err
+	}
+	if peer.Type == "channel" {
+		if forMe {
+			return nil, output.Errf("bad_args", "channels cannot delete messages only for you")
+		}
+		ch, err := resolve.InputChannel(peer)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := conn.Ctx.Raw.ChannelsDeleteMessages(conn.Ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: ch,
+			ID:      ids,
+		}); err != nil {
+			return nil, client.WrapErr(err)
+		}
+		return map[string]any{"status": "ok", "deleted": len(ids)}, nil
+	}
+	if _, err := conn.Ctx.Raw.MessagesDeleteMessages(conn.Ctx, &tg.MessagesDeleteMessagesRequest{
+		Revoke: !forMe,
+		ID:     ids,
+	}); err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return map[string]any{"status": "ok", "deleted": len(ids)}, nil
+}
+
+// Forward copies a single message from fromSel into toSel.
+func Forward(conn *client.Conn, fromSel string, msgID int, toSel string) (map[string]any, error) {
+	fromPeer, err := resolve.Resolve(conn, fromSel)
+	if err != nil {
+		return nil, err
+	}
+	fromIP, err := resolve.InputPeer(conn, fromPeer)
+	if err != nil {
+		return nil, err
+	}
+	toPeer, err := resolve.Resolve(conn, toSel)
+	if err != nil {
+		return nil, err
+	}
+	toIP, err := resolve.InputPeer(conn, toPeer)
+	if err != nil {
+		return nil, err
+	}
+	upd, err := conn.Ctx.Raw.MessagesForwardMessages(conn.Ctx, &tg.MessagesForwardMessagesRequest{
+		FromPeer: fromIP,
+		ToPeer:   toIP,
+		ID:       []int{msgID},
+		RandomID: []int64{randomID()},
+	})
+	if err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return sentResult(upd, toPeer.ID), nil
 }
