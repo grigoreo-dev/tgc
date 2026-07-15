@@ -24,6 +24,26 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestBotDirectPeer(t *testing.T) {
+	// A positive id is a user: a bot can address it directly via
+	// InputPeerUser{AccessHash:0} without enumerating dialogs.
+	p := botDirectPeer(7793215727)
+	if p == nil {
+		t.Fatal("positive (user) id must yield a direct peer for bots")
+	}
+	if p.ID != 7793215727 || p.Type != "user" || p.AccessHash != 0 {
+		t.Fatalf("got %+v", p)
+	}
+	// Negative ids are chats/channels — a bot has no direct-access-hash path,
+	// so no fast peer (caller handles the error).
+	if botDirectPeer(-1001234567890) != nil {
+		t.Fatal("negative (chat/channel) id must not get a direct bot peer")
+	}
+	if botDirectPeer(-4712345678) != nil {
+		t.Fatal("negative (basic-group) id must not get a direct bot peer")
+	}
+}
+
 func TestFuzzyMatch(t *testing.T) {
 	peers := []Peer{
 		{ID: 1, Title: "Alice Smith", Username: "alice"},

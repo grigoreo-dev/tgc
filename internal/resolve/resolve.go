@@ -210,9 +210,30 @@ func capPeers(peers []Peer, limit int) []Peer {
 	return peers
 }
 
+// botDirectPeer returns a peer a bot can address directly by numeric id
+// without enumerating dialogs (bots cannot call messages.getDialogs). A
+// positive id is a user, reachable via InputPeerUser{AccessHash:0} when that
+// user has interacted with the bot. Negative ids (chats/channels) have no
+// such access-hash-free path, so this returns nil and the caller reports the
+// peer as unknown.
+func botDirectPeer(id int64) *Peer {
+	if id > 0 {
+		return &Peer{ID: id, Type: "user"}
+	}
+	return nil
+}
+
 func resolveByID(conn *client.Conn, id int64) (*Peer, error) {
 	ip := conn.Ctx.PeerStorage.GetInputPeerById(id)
 	if _, isEmpty := ip.(*tg.InputPeerEmpty); isEmpty {
+		// Bots cannot list dialogs (messages.getDialogs is BOT_METHOD_INVALID),
+		// so resolve a user id directly instead of enumerating.
+		if conn.Profile != nil && conn.Profile.Type == "bot" {
+			if p := botDirectPeer(id); p != nil {
+				return p, nil
+			}
+			return nil, output.Errf("not_found", "peer id %d is unknown to this bot", id)
+		}
 		peers, err := Dialogs(conn, false, 0)
 		if err != nil {
 			return nil, err
