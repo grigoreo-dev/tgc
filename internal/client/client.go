@@ -205,6 +205,10 @@ func WrapErr(err error) error {
 	if tgerr.Is(err, "BOT_METHOD_INVALID") {
 		return output.Errf("bot_unsupported", "this command is not available for bot accounts")
 	}
+	if tgerr.Is(err, "RICH_MESSAGE_UNSUPPORTED") {
+		return output.Errf("rich_unsupported",
+			"rich messages are not supported for this account; omit --rich or send default Markdown")
+	}
 	return err
 }
 

@@ -2,13 +2,44 @@ package client
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gotd/td/tgerr"
+
 	"github.com/grigoreo-dev/tgc/internal/config"
+	"github.com/grigoreo-dev/tgc/internal/output"
 )
+
+// RICH_MESSAGE_UNSUPPORTED must map to a structured rich_unsupported error,
+// not leak as a raw "internal" RPC string.
+func TestWrapErrRichUnsupported(t *testing.T) {
+	err := WrapErr(tgerr.New(400, "RICH_MESSAGE_UNSUPPORTED"))
+	var oe *output.Error
+	if !errors.As(err, &oe) {
+		t.Fatalf("want *output.Error, got %T: %v", err, err)
+	}
+	if oe.Code != "rich_unsupported" {
+		t.Fatalf("code = %q, want rich_unsupported", oe.Code)
+	}
+	if strings.Contains(oe.Message, "rpcDoRequest") || strings.Contains(oe.Message, "RICH_MESSAGE_UNSUPPORTED") {
+		t.Fatalf("message leaks raw RPC text: %q", oe.Message)
+	}
+}
+
+// WrapErr passes through unmapped errors unchanged and leaves nil as nil.
+func TestWrapErrPassthroughAndNil(t *testing.T) {
+	if WrapErr(nil) != nil {
+		t.Fatal("nil must stay nil")
+	}
+	orig := errors.New("some transport failure")
+	if got := WrapErr(orig); got != orig {
+		t.Fatalf("unmapped error must pass through unchanged, got %v", got)
+	}
+}
 
 // When stdin is not a TTY (piped input, e.g. automation or tests), secret
 // prompts must fall back to a normal buffered read so the flow still works.
