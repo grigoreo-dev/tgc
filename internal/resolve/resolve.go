@@ -102,6 +102,36 @@ func Resolve(conn *client.Conn, selector string) (*Peer, error) {
 	}
 }
 
+// InputUser builds a Telegram InputUser for a resolved user peer.
+func InputUser(p *Peer) (tg.InputUserClass, error) {
+	if p == nil || p.Type != "user" {
+		return nil, output.Errf("bad_args", "not a user peer")
+	}
+	return &tg.InputUser{UserID: p.ID, AccessHash: p.AccessHash}, nil
+}
+
+// InputChannel builds a Telegram InputChannel for a resolved channel or
+// megagroup peer. Legacy basic groups have no channel id and yield an error.
+func InputChannel(p *Peer) (tg.InputChannelClass, error) {
+	if p == nil {
+		return nil, output.Errf("bad_args", "peer is nil")
+	}
+	switch p.Type {
+	case "channel":
+		return &tg.InputChannel{ChannelID: plainChannelID(p.ID), AccessHash: p.AccessHash}, nil
+	case "group":
+		if p.AccessHash != 0 {
+			return &tg.InputChannel{ChannelID: plainChannelID(p.ID), AccessHash: p.AccessHash}, nil
+		}
+		return nil, output.Errf("bad_args", "legacy basic group has no channel id")
+	default:
+		return nil, output.Errf("bad_args", "not a channel/group peer")
+	}
+}
+
+// PlainChatID exposes the legacy basic-group id (positive) for a group peer.
+func PlainChatID(id int64) int64 { return plainChatID(id) }
+
 // InputPeer builds a Telegram InputPeer for the resolved peer.
 func InputPeer(conn *client.Conn, p *Peer) (tg.InputPeerClass, error) {
 	if p == nil {
