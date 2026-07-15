@@ -9,6 +9,7 @@ require (
 	github.com/gotd/contrib v0.21.1
 	github.com/gotd/td v0.153.0
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/term v0.44.0
 )
 
 require (

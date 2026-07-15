@@ -34,6 +34,7 @@ func Pretty() bool { return flagPretty }
 func Execute() {
 	rootCmd.PersistentFlags().StringVar(&flagProfile, "profile", "", "profile name (default from config or TGC_PROFILE)")
 	rootCmd.PersistentFlags().BoolVar(&flagPretty, "pretty", false, "human-readable output")
+	cobra.OnInitialize(func() { output.SetPretty(flagPretty) })
 	if err := rootCmd.Execute(); err != nil {
 		output.FailErr(err)
 	}
