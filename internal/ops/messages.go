@@ -415,7 +415,9 @@ func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]
 			Message:  body,
 			RandomID: randomID(),
 		}
-		req.SetRichMessage(markup.TryRichMarkdown(body))
+		// InputRichMessageMarkdown expects the RAW Markdown source; parseText's
+		// body has already been rendered/stripped, so use the original text.
+		req.SetRichMessage(markup.TryRichMarkdown(text))
 		setReplyTo(req)
 		if upd, err := conn.Ctx.Raw.MessagesSendMessage(conn.Ctx, req); err == nil {
 			return sentResult(upd, peer.ID), nil
