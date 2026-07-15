@@ -351,6 +351,10 @@ func sentResult(upd tg.UpdatesClass, chatID int64) map[string]any {
 				mc = nu.Message
 			case *tg.UpdateNewChannelMessage:
 				mc = nu.Message
+			case *tg.UpdateEditMessage:
+				mc = nu.Message
+			case *tg.UpdateEditChannelMessage:
+				mc = nu.Message
 			default:
 				continue
 			}
