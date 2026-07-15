@@ -1,9 +1,11 @@
 /tgc
 /dist/
 *.db
+.env
 .superpowers/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
 .beads-credential-key
 .beads/proxieddb/
+.worktrees/
