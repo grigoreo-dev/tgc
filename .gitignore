@@ -2,6 +2,7 @@
 /dist/
 *.db
 .env
+.tgc-local/
 .superpowers/
 
 # Beads / Dolt files (added by bd init)
