@@ -121,8 +121,37 @@ func Connect(profileName string) (*Conn, error) {
 	return conn, nil
 }
 
+// isAuthRestart reports whether err is Telegram's AUTH_RESTART, the protocol
+// signal to discard the current auth state and start the flow over.
+func isAuthRestart(err error) bool {
+	return tgerr.Is(err, "AUTH_RESTART")
+}
+
+// resetSession removes a profile's persisted session state so the next auth
+// flow starts clean: the sqlite database (plus its WAL/SHM sidecars) and any
+// imported string session. Missing files are not an error.
+func resetSession(p *config.Profile) error {
+	paths := []string{
+		p.SessionPath,
+		p.SessionPath + "-wal",
+		p.SessionPath + "-shm",
+		filepath.Join(p.Dir, "session.txt"),
+	}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 // ConnectForLogin runs the auth flow: interactive terminal prompts for user
 // accounts, non-interactive for bot tokens. Persists profile type on success.
+//
+// If Telegram answers AUTH_RESTART (stale/partial auth state from a previous
+// interrupted attempt), the leftover session is cleared and the flow is
+// retried once transparently, so callers never have to delete session files
+// by hand.
 func ConnectForLogin(profileName, phone, botToken string) (*Conn, error) {
 	p, err := config.ResolveProfile(profileName)
 	if err != nil {
@@ -133,13 +162,26 @@ func ConnectForLogin(profileName, phone, botToken string) (*Conn, error) {
 	if bot {
 		secret, ptype = botToken, "bot"
 	}
-	conn, err := build(p, bot, secret, &gotgproto.ClientOpts{
-		Session:          sessionFor(p),
-		NoUpdates:        true,
-		DisableCopyright: true,
-		Middlewares:      middlewares(),
-		AuthConversator:  newTerminalConversator(),
-	})
+
+	attempt := func() (*Conn, error) {
+		return build(p, bot, secret, &gotgproto.ClientOpts{
+			Session:          sessionFor(p),
+			NoUpdates:        true,
+			DisableCopyright: true,
+			Middlewares:      middlewares(),
+			AuthConversator:  newTerminalConversator(),
+		})
+	}
+
+	conn, err := attempt()
+	if err != nil && isAuthRestart(err) {
+		// Telegram wants a clean slate: drop the partial session and retry once.
+		fmt.Fprintln(os.Stderr, "auth: AUTH_RESTART — clearing partial session and retrying")
+		if rerr := resetSession(p); rerr != nil {
+			return nil, rerr
+		}
+		conn, err = attempt()
+	}
 	if err != nil {
 		return nil, err
 	}
