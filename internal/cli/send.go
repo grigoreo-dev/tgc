@@ -14,6 +14,7 @@ import (
 var (
 	sendReply      int
 	sendPlain      bool
+	sendRich       string
 	sendFiles      []string
 	sendCaption    string
 	sendAsDocument bool
@@ -63,7 +64,7 @@ var sendCmd = &cobra.Command{
 		if text == "" {
 			return output.Errf("bad_args", "empty message: pass text, '-' for stdin, or --file")
 		}
-		res, err := ops.SendText(conn, args[0], text, ops.SendOpts{ReplyTo: sendReply, Plain: sendPlain})
+		res, err := ops.SendText(conn, args[0], text, ops.SendOpts{ReplyTo: sendReply, Plain: sendPlain, RichJSON: sendRich})
 		if err != nil {
 			return err
 		}
@@ -148,6 +149,7 @@ var forwardCmd = &cobra.Command{
 func init() {
 	sendCmd.Flags().IntVar(&sendReply, "reply", 0, "reply to message id")
 	sendCmd.Flags().BoolVar(&sendPlain, "plain", false, "disable Markdown parsing")
+	sendCmd.Flags().StringVar(&sendRich, "rich", "", `expert rich_message payload as JSON, e.g. {"type":"markdown","markdown":"..."}`)
 	sendCmd.Flags().StringArrayVar(&sendFiles, "file", nil, "file to send (repeat for album, max 10)")
 	sendCmd.Flags().StringVar(&sendCaption, "caption", "", "caption for file/album")
 	sendCmd.Flags().BoolVar(&sendAsDocument, "as-document", false, "send image as document (default: photo for image/*)")

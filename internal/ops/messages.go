@@ -3,6 +3,7 @@ package ops
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -298,10 +299,12 @@ func peerID(peer tg.PeerClass) int64 {
 	return 0
 }
 
-// SendOpts controls SendText: reply target and Markdown vs plain parsing.
+// SendOpts controls SendText: reply target, Markdown vs plain parsing, and an
+// optional expert --rich payload (JSON) sent via sendMessage.rich_message.
 type SendOpts struct {
-	ReplyTo int
-	Plain   bool
+	ReplyTo  int
+	Plain    bool
+	RichJSON string
 }
 
 // parseText converts message text to body + entities, honoring the plain flag.
@@ -375,6 +378,52 @@ func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]
 	if err != nil {
 		return nil, err
 	}
+
+	// setReplyTo applies the reply target to a request when requested.
+	setReplyTo := func(req *tg.MessagesSendMessageRequest) {
+		if o.ReplyTo > 0 {
+			req.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: o.ReplyTo})
+		}
+	}
+
+	// Path 1: explicit --rich payload. This is an expert request, so an RPC
+	// failure surfaces to the caller — no silent entities fallback.
+	if o.RichJSON != "" {
+		rm, err := markup.ParseRichJSON(json.RawMessage(o.RichJSON))
+		if err != nil {
+			return nil, err
+		}
+		req := &tg.MessagesSendMessageRequest{
+			Peer:     ip,
+			Message:  body,
+			RandomID: randomID(),
+		}
+		req.SetRichMessage(rm)
+		setReplyTo(req)
+		upd, err := conn.Ctx.Raw.MessagesSendMessage(conn.Ctx, req)
+		if err != nil {
+			return nil, client.WrapErr(err)
+		}
+		return sentResult(upd, peer.ID), nil
+	}
+
+	// Path 2: default (non-plain) — attempt rich_message, then transparently
+	// fall back to the Task 6 entities path once if the user-layer rejects it.
+	if !o.Plain {
+		req := &tg.MessagesSendMessageRequest{
+			Peer:     ip,
+			Message:  body,
+			RandomID: randomID(),
+		}
+		req.SetRichMessage(markup.TryRichMarkdown(body))
+		setReplyTo(req)
+		if upd, err := conn.Ctx.Raw.MessagesSendMessage(conn.Ctx, req); err == nil {
+			return sentResult(upd, peer.ID), nil
+		}
+		// Rich rejected: retry once with the plain entities path, no error surfaced.
+	}
+
+	// Path 3 (and rich fallback): entities path — today's behavior.
 	req := &tg.MessagesSendMessageRequest{
 		Peer:     ip,
 		Message:  body,
@@ -383,9 +432,7 @@ func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]
 	if len(entities) > 0 {
 		req.SetEntities(entities)
 	}
-	if o.ReplyTo > 0 {
-		req.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: o.ReplyTo})
-	}
+	setReplyTo(req)
 	upd, err := conn.Ctx.Raw.MessagesSendMessage(conn.Ctx, req)
 	if err != nil {
 		return nil, client.WrapErr(err)
