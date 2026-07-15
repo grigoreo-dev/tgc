@@ -18,6 +18,7 @@ import (
 	"github.com/gotd/contrib/middleware/floodwait"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tgerr"
+	"golang.org/x/term"
 
 	"github.com/grigoreo-dev/tgc/internal/config"
 	"github.com/grigoreo-dev/tgc/internal/output"
@@ -176,8 +177,33 @@ func newTerminalConversator() *terminalConversator {
 }
 
 func (t *terminalConversator) prompt(label string) (string, error) {
+	return t.readAnswer(label, false, term.IsTerminal(int(os.Stdin.Fd())))
+}
+
+// promptSecret reads a sensitive answer (e.g. a 2FA password) without echoing
+// it to the terminal.
+func (t *terminalConversator) promptSecret(label string) (string, error) {
+	return t.readAnswer(label, true, term.IsTerminal(int(os.Stdin.Fd())))
+}
+
+// readAnswer prints label to stderr and reads one answer from stdin. When
+// secret is set and stdin is a real terminal, input is read with echo
+// disabled (via term.ReadPassword) so passwords never appear on screen or in
+// the scrollback. When stdin is not a TTY (piped input, automation, tests),
+// it falls back to a normal buffered read so those flows still work.
+func (t *terminalConversator) readAnswer(label string, secret, isTTY bool) (string, error) {
 	if _, err := fmt.Fprint(os.Stderr, label); err != nil {
 		return "", err
+	}
+	if secret && isTTY {
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		// ReadPassword consumes the newline but does not echo it; emit one so
+		// the next prompt/output starts on a fresh line.
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
 	}
 	s, err := t.in.ReadString('\n')
 	if err != nil {
@@ -205,7 +231,7 @@ func (t *terminalConversator) AskCode() (string, error) {
 
 func (t *terminalConversator) AskPassword() (string, error) {
 	t.retryNote(gotgproto.AuthStatusPasswordRetrial, "2FA password")
-	return t.prompt("2FA password: ")
+	return t.promptSecret("2FA password: ")
 }
 
 func (t *terminalConversator) AuthStatus(s gotgproto.AuthStatus) {
