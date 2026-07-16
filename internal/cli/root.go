@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/grigoreo-dev/tgc/internal/output"
+	"github.com/grigoreo-dev/tgc/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -34,6 +35,8 @@ func Pretty() bool { return flagPretty }
 func Execute() {
 	rootCmd.PersistentFlags().StringVar(&flagProfile, "profile", "", "profile name (default from config or TGC_PROFILE)")
 	rootCmd.PersistentFlags().BoolVar(&flagPretty, "pretty", false, "human-readable output")
+	rootCmd.Version = version.Version
+	rootCmd.SetVersionTemplate(`{"version":"{{.Version}}"}` + "\n")
 	cobra.OnInitialize(func() { output.SetPretty(flagPretty) })
 	if err := rootCmd.Execute(); err != nil {
 		output.FailErr(err)
