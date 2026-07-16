@@ -35,9 +35,25 @@ translator in v1.
    entities path (`SetEntities`) — transparent, no error surfaced.
 3. **`--plain`**: today's entities-free/entities path, no rich.
 
-## Open item (Task 13)
+## Live result (Task 13)
 
-The user-account rich behavior can only be confirmed against a live server.
-Task 13 runs the first live probe and updates this note with the observed
-outcome (does the user layer accept `rich_message`, or is the entities fallback
-always taken?).
+The open question from Task 11 — does the user layer accept `rich_message`, or
+is the entities fallback always taken? — was answered by the Task 13 live probe
+against a real server. The observed outcome:
+
+- **Default block-markdown send** (non-plain, no `--rich`): the server rejects
+  `rich_message` for a normal user account, so tgc's transparent entities
+  fallback fires. A message combining a heading, a list, and a quote was
+  delivered as entity-formatted text, with the Markdown rendered correctly and
+  no error surfaced to the caller.
+- **Explicit `--rich`** on a user account: fails with `RICH_MESSAGE_UNSUPPORTED`.
+  tgc maps this to a structured error,
+  `{"error":"rich_unsupported","message":"rich messages are not supported for this account; omit --rich or send default Markdown"}`,
+  and exits 1. An explicit `--rich` request does not silently fall back — that
+  is by design, so an expert who asked for the rich path learns it was refused
+  rather than getting a quietly different result.
+
+On user accounts the entities path is therefore effectively always taken. The
+`InputRichMessageMarkdown` path is still retained for two reasons: bots and
+other account classes may accept it, and the default send degrades to entities
+transparently when it does not. No custom PageBlock AST is needed in v1.

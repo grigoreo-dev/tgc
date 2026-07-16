@@ -1,8 +1,122 @@
+[Русская версия](README.ru.md)
+
 # tgc
 
-Agent-first Telegram CLI (Go, MTProto via gotgproto/gotd).
+An agent-first Telegram CLI written in Go, speaking MTProto through
+[gotgproto](https://github.com/celestix/gotgproto) and
+[gotd/td](https://github.com/gotd/td). It writes compact JSONL to stdout and
+structured JSON errors to stderr, so an agent can pipe and parse every result;
+pass `--pretty` when a human is reading.
 
-Compact JSONL on stdout, structured JSON errors on stderr, `--pretty` for humans.
+## Install
 
-Status: v1 in development. See design spec in the workspace meta-repo:
-`docs/superpowers/specs/2026-07-13-tgc-telegram-cli-design.md`.
+```sh
+go install github.com/grigoreo-dev/tgc/cmd/tgc@latest
+```
+
+## Quick start
+
+Get an `api_id` and `api_hash` at [my.telegram.org](https://my.telegram.org),
+then log in:
+
+```sh
+tgc auth login --phone +NNN        # user account
+tgc auth login --bot-token $TOKEN  # bot account
+```
+
+Once logged in:
+
+```sh
+tgc chats
+tgc send @user "**hi**"
+tgc read @user --limit 10
+```
+
+## Commands
+
+Run `tgc --help` for the full list; `tgc <command> --help` for each command's
+flags.
+
+| Command | Purpose |
+|---------|---------|
+| `auth`     | Manage Telegram sessions (login, list, export, import, logout). |
+| `chats`    | List dialogs (cached 5m; `--fresh` to refresh). |
+| `info`     | Show a chat or user card. |
+| `members`  | List the members of a group. |
+| `search`   | Search chats and contacts; `--messages` for global message search. |
+| `read`     | Read chat history, newest first. |
+| `context`  | Show a message with the messages surrounding it. |
+| `send`     | Send a message (Markdown by default; `--file` for media). |
+| `edit`     | Edit a message you sent. |
+| `delete`   | Delete messages (for everyone by default; `--for-me` to keep for others). |
+| `forward`  | Forward a message to another chat. |
+| `download` | Download media from a message. |
+
+## Output contract
+
+- **stdout** carries results only, as compact JSONL — one JSON object per line.
+  This is the default so agents can pipe output straight into a parser.
+- **stderr** carries errors, as a single structured JSON line
+  (`{"error":"<code>","message":"..."}`), and the process exits 1.
+- `--pretty` switches stdout to human-readable tables instead of JSONL.
+
+### Error codes
+
+Errors use a stable set of machine-readable codes:
+
+| Code | Meaning |
+|------|---------|
+| `ambiguous`          | A selector matched more than one chat; candidates are in the error body. |
+| `bad_args`           | Invalid arguments or flags. |
+| `bad_config`         | The config file or an env var could not be parsed. |
+| `bot_unsupported`    | The command is not available for bot accounts. |
+| `flood_wait`         | Telegram rate-limited the request; retry after the wait. |
+| `io_error`           | A local filesystem operation failed. |
+| `no_api_credentials` | `api_id`/`api_hash` are not set. |
+| `no_media`           | The target message has no downloadable media. |
+| `not_authenticated`  | No session for the selected profile. |
+| `not_found`          | The chat, user, or message could not be resolved. |
+| `rich_unsupported`   | The account rejected a `--rich` message. |
+| `upload_failed`      | An uploaded file did not come back usable. |
+
+## Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `TGC_PROFILE`      | The active profile (same as `--profile`). |
+| `TGC_API_ID`       | Telegram `api_id`. |
+| `TGC_API_HASH`     | Telegram `api_hash`. |
+| `TGC_SESSION`      | Import a session string directly, without a session file. |
+| `TGC_CONFIG_DIR`   | Override the config/profile root. `XDG_CONFIG_HOME` is honored too. |
+| `TGC_DOWNLOAD_DIR` | Download root; defaults to `~/.tgc/downloads`. |
+| `NO_COLOR`         | Disable `--pretty` colors. |
+
+## Profiles
+
+tgc keeps named profiles, selected with `--profile` or `TGC_PROFILE`. Each
+profile stores its session under the config directory, and a profile is either a
+user login or a bot login. This lets you keep, say, a personal account and a bot
+side by side and switch between them per command.
+
+## Bot-mode limits
+
+A bot account can't list dialogs or run a global chat search — both return
+`bot_unsupported`, because Telegram doesn't expose those to bots. A bot can send
+and read in chats it belongs to: address a user by `@username`, or by numeric
+user id for someone who has already messaged the bot.
+
+## Rich messages
+
+By default, Markdown renders through Telegram message entities, which every
+account supports. A server-side rich-message path also exists, but user accounts
+reject it with `RICH_MESSAGE_UNSUPPORTED`, so tgc falls back to entities
+transparently — no custom PageBlock AST ships in v1. See
+[docs/rich-spike.md](docs/rich-spike.md) for the full investigation and the live
+result.
+
+## Documentation
+
+- Design spec: [docs/superpowers/specs/2026-07-13-tgc-telegram-cli-design.md](docs/superpowers/specs/2026-07-13-tgc-telegram-cli-design.md)
+- Implementation plan: [docs/superpowers/plans/2026-07-14-tgc-v1-implementation.md](docs/superpowers/plans/2026-07-14-tgc-v1-implementation.md)
+- Live integration checklist: [docs/integration-checklist.md](docs/integration-checklist.md)
+- RichMessage spike: [docs/rich-spike.md](docs/rich-spike.md)
