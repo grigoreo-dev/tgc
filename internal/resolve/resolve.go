@@ -27,9 +27,13 @@ type Peer struct {
 
 var phoneRe = regexp.MustCompile(`^\+[0-9]{7,15}$`)
 
-// Classify determines the selector kind: id, username, phone or name.
+// Classify determines the selector kind: self, id, username, phone or name.
 func Classify(s string) (kind, value string) {
 	s = strings.TrimSpace(s)
+	switch strings.ToLower(s) {
+	case "me", "self", "saved", "saved messages":
+		return "self", ""
+	}
 	if strings.HasPrefix(s, "@") {
 		return "username", strings.TrimPrefix(s, "@")
 	}
@@ -65,6 +69,12 @@ func FuzzyMatch(peers []Peer, query string) []Peer {
 func Resolve(conn *client.Conn, selector string) (*Peer, error) {
 	kind, val := Classify(selector)
 	switch kind {
+	case "self":
+		p := peerFromUser(conn.Client.Self)
+		if p == nil {
+			return nil, output.Errf("not_authenticated", "cannot resolve %q: not logged in", selector)
+		}
+		return p, nil
 	case "id":
 		id, _ := strconv.ParseInt(val, 10, 64)
 		return resolveByID(conn, id)
@@ -200,9 +210,30 @@ func capPeers(peers []Peer, limit int) []Peer {
 	return peers
 }
 
+// botDirectPeer returns a peer a bot can address directly by numeric id
+// without enumerating dialogs (bots cannot call messages.getDialogs). A
+// positive id is a user, reachable via InputPeerUser{AccessHash:0} when that
+// user has interacted with the bot. Negative ids (chats/channels) have no
+// such access-hash-free path, so this returns nil and the caller reports the
+// peer as unknown.
+func botDirectPeer(id int64) *Peer {
+	if id > 0 {
+		return &Peer{ID: id, Type: "user"}
+	}
+	return nil
+}
+
 func resolveByID(conn *client.Conn, id int64) (*Peer, error) {
 	ip := conn.Ctx.PeerStorage.GetInputPeerById(id)
 	if _, isEmpty := ip.(*tg.InputPeerEmpty); isEmpty {
+		// Bots cannot list dialogs (messages.getDialogs is BOT_METHOD_INVALID),
+		// so resolve a user id directly instead of enumerating.
+		if conn.Profile != nil && conn.Profile.Type == "bot" {
+			if p := botDirectPeer(id); p != nil {
+				return p, nil
+			}
+			return nil, output.Errf("not_found", "peer id %d is unknown to this bot", id)
+		}
 		peers, err := Dialogs(conn, false, 0)
 		if err != nil {
 			return nil, err

@@ -43,6 +43,35 @@ func TestEmitAllJSONL(t *testing.T) {
 	}
 }
 
+func TestPrettyMapRendering(t *testing.T) {
+	var buf bytes.Buffer
+	stdout = &buf
+	defer func() { stdout = defaultStdout; SetPretty(false) }()
+	SetPretty(true)
+
+	Emit(map[string]any{"id": 42, "title": "Chat"})
+
+	got := buf.String()
+	if strings.Contains(got, "{") {
+		t.Fatalf("pretty must not print raw JSON: %q", got)
+	}
+	if !strings.Contains(got, "42") || !strings.Contains(got, "Chat") {
+		t.Fatalf("values missing: %q", got)
+	}
+}
+
+func TestPrettyNoColorWhenNotTTY(t *testing.T) {
+	var buf bytes.Buffer
+	stdout = &buf
+	defer func() { stdout = defaultStdout; SetPretty(false) }()
+	SetPretty(true)
+
+	Emit(map[string]any{"a": 1})
+	if strings.Contains(buf.String(), "\x1b[") {
+		t.Fatalf("ANSI codes in non-TTY output: %q", buf.String())
+	}
+}
+
 func TestErrfProducesStructuredError(t *testing.T) {
 	err := Errf("flood_wait", "wait %d seconds", 42)
 	var e *Error

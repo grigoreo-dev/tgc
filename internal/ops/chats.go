@@ -2,6 +2,8 @@
 package ops
 
 import (
+	"time"
+
 	"github.com/gotd/td/tg"
 
 	"github.com/grigoreo-dev/tgc/internal/client"
@@ -230,10 +232,19 @@ func SearchChats(conn *client.Conn, query string, limit int) ([]resolve.Peer, er
 	return found, nil
 }
 
-// SearchMessages performs a global message search. The message conversion
-// lands with the read command (Task 8); until then this is a stub.
+// SearchMessages performs a global message search across all chats. Each
+// result derives its own chat_id from the message peer.
 func SearchMessages(conn *client.Conn, query string, limit int) ([]map[string]any, error) {
-	return nil, output.Errf("not_implemented", "message search lands with the read command")
+	res, err := conn.Ctx.Raw.MessagesSearchGlobal(conn.Ctx, &tg.MessagesSearchGlobalRequest{
+		Q:          query,
+		Limit:      limit,
+		OffsetPeer: &tg.InputPeerEmpty{},
+		Filter:     &tg.InputMessagesFilterEmpty{},
+	})
+	if err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return collectMessages(res, 0, time.Time{}), nil
 }
 
 func indexUsers(users []tg.UserClass) map[int64]*tg.User {

@@ -1,0 +1,538 @@
+package ops
+
+import (
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
+	"time"
+
+	"github.com/gotd/td/tg"
+
+	"github.com/grigoreo-dev/tgc/internal/client"
+	"github.com/grigoreo-dev/tgc/internal/markup"
+	"github.com/grigoreo-dev/tgc/internal/output"
+	"github.com/grigoreo-dev/tgc/internal/resolve"
+)
+
+// ParseDateArg parses a date argument in YYYY-MM-DD or RFC3339 form.
+func ParseDateArg(s string) (time.Time, error) {
+	for _, layout := range []string{"2006-01-02", time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, output.Errf("bad_args", "cannot parse date %q (want YYYY-MM-DD or RFC3339)", s)
+}
+
+// ReadOpts controls Read: paging, id/date windows, sender and search filters.
+type ReadOpts struct {
+	Limit    int
+	BeforeID int
+	AfterID  int
+	Since    string
+	Until    string
+	From     string
+	Search   string
+}
+
+// Read returns chat messages newest-first. Search or From routes through
+// messages.search; otherwise messages.getHistory with id/date windows.
+func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, error) {
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, err
+	}
+	ip, err := resolve.InputPeer(conn, peer)
+	if err != nil {
+		return nil, err
+	}
+	if o.Limit == 0 {
+		o.Limit = 20
+	}
+
+	var sinceT time.Time
+	if o.Since != "" {
+		if sinceT, err = ParseDateArg(o.Since); err != nil {
+			return nil, err
+		}
+	}
+
+	switch {
+	case o.Search != "" || o.From != "":
+		req := &tg.MessagesSearchRequest{
+			Peer: ip, Q: o.Search, Filter: &tg.InputMessagesFilterEmpty{}, Limit: o.Limit,
+		}
+		if o.From != "" {
+			fromPeer, err := resolve.Resolve(conn, o.From)
+			if err != nil {
+				return nil, err
+			}
+			fip, err := resolve.InputPeer(conn, fromPeer)
+			if err != nil {
+				return nil, err
+			}
+			req.SetFromID(fip)
+		}
+		res, err := conn.Ctx.Raw.MessagesSearch(conn.Ctx, req)
+		if err != nil {
+			return nil, client.WrapErr(err)
+		}
+		return collectMessages(res, peer.ID, sinceT), nil
+	default:
+		req := &tg.MessagesGetHistoryRequest{Peer: ip, Limit: o.Limit}
+		if o.BeforeID > 0 {
+			req.OffsetID = o.BeforeID
+			req.MaxID = o.BeforeID
+		}
+		if o.AfterID > 0 {
+			req.MinID = o.AfterID
+		}
+		if o.Until != "" {
+			t, err := ParseDateArg(o.Until)
+			if err != nil {
+				return nil, err
+			}
+			req.OffsetDate = int(t.Unix())
+		}
+		res, err := conn.Ctx.Raw.MessagesGetHistory(conn.Ctx, req)
+		if err != nil {
+			return nil, client.WrapErr(err)
+		}
+		return collectMessages(res, peer.ID, sinceT), nil
+	}
+}
+
+// Context returns a message plus radius messages on each side.
+func Context(conn *client.Conn, selector string, msgID, radius int) ([]map[string]any, error) {
+	if radius <= 0 {
+		radius = 10
+	}
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, err
+	}
+	ip, err := resolve.InputPeer(conn, peer)
+	if err != nil {
+		return nil, err
+	}
+	res, err := conn.Ctx.Raw.MessagesGetHistory(conn.Ctx, &tg.MessagesGetHistoryRequest{
+		Peer: ip, OffsetID: msgID + radius + 1, Limit: radius*2 + 1,
+	})
+	if err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return collectMessages(res, peer.ID, time.Time{}), nil
+}
+
+// collectMessages extracts messages plus their attached users/chats from an
+// API response, converts each to a map, and drops messages older than since
+// (when set). A chatID of 0 makes each message derive its own chat_id.
+func collectMessages(res tg.MessagesMessagesClass, chatID int64, since time.Time) []map[string]any {
+	var (
+		msgs  []tg.MessageClass
+		users []tg.UserClass
+		chats []tg.ChatClass
+	)
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		msgs, users, chats = r.Messages, r.Users, r.Chats
+	case *tg.MessagesMessagesSlice:
+		msgs, users, chats = r.Messages, r.Users, r.Chats
+	case *tg.MessagesChannelMessages:
+		msgs, users, chats = r.Messages, r.Users, r.Chats
+	default:
+		return nil
+	}
+	userIdx := indexUsers(users)
+	chatIdx := indexChats(chats)
+	out := make([]map[string]any, 0, len(msgs))
+	for _, mc := range msgs {
+		m, ok := mc.(*tg.Message)
+		if !ok {
+			continue
+		}
+		if !since.IsZero() && time.Unix(int64(m.Date), 0).UTC().Before(since) {
+			continue
+		}
+		cid := chatID
+		if cid == 0 {
+			cid = peerID(m.PeerID)
+		}
+		out = append(out, messageToMap(m, userIdx, chatIdx, cid))
+	}
+	return out
+}
+
+// messageToMap renders a message per the tgc field contract. Senders are read
+// only from the users/chats attached to the API response (no extra resolves).
+func messageToMap(m *tg.Message, users map[int64]*tg.User, chats map[int64]tg.ChatClass, chatID int64) map[string]any {
+	out := map[string]any{
+		"id":              m.ID,
+		"chat_id":         chatID,
+		"date":            time.Unix(int64(m.Date), 0).UTC().Format(time.RFC3339),
+		"text":            m.Message,
+		"reply_to":        nil,
+		"media":           nil,
+		"edited":          false,
+		"fwd_from":        nil,
+		"sender_id":       nil,
+		"sender_name":     nil,
+		"sender_username": nil,
+	}
+
+	if m.FromID != nil {
+		if uid := peerUserID(m.FromID); uid != 0 {
+			out["sender_id"] = uid
+			if u, ok := users[uid]; ok {
+				if name := userName(u); name != "" {
+					out["sender_name"] = name
+				}
+				if u.Username != "" {
+					out["sender_username"] = u.Username
+				}
+			}
+		}
+	}
+
+	if m.ReplyTo != nil {
+		if h, ok := m.ReplyTo.(*tg.MessageReplyHeader); ok && h.ReplyToMsgID != 0 {
+			out["reply_to"] = h.ReplyToMsgID
+		}
+	}
+
+	if m.EditDate != 0 {
+		out["edited"] = true
+	}
+
+	if m.FwdFrom.FromID != nil || m.FwdFrom.FromName != "" {
+		if name := fwdFromName(m.FwdFrom, users); name != "" {
+			out["fwd_from"] = name
+		}
+	}
+
+	if m.Media != nil {
+		if mm := mediaToMap(m.Media); mm != nil {
+			out["media"] = mm
+		}
+	}
+
+	return out
+}
+
+func mediaToMap(media tg.MessageMediaClass) map[string]any {
+	switch mv := media.(type) {
+	case *tg.MessageMediaPhoto:
+		return map[string]any{"type": "photo"}
+	case *tg.MessageMediaDocument:
+		doc, ok := mv.Document.(*tg.Document)
+		if !ok {
+			return map[string]any{"type": "document"}
+		}
+		out := map[string]any{
+			"type": "document",
+			"size": doc.Size,
+			"mime": doc.MimeType,
+		}
+		for _, attr := range doc.Attributes {
+			switch a := attr.(type) {
+			case *tg.DocumentAttributeVideo:
+				out["type"] = "video"
+			case *tg.DocumentAttributeAudio:
+				if a.Voice {
+					out["type"] = "voice"
+				} else {
+					out["type"] = "audio"
+				}
+			case *tg.DocumentAttributeFilename:
+				out["file_name"] = a.FileName
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func fwdFromName(fwd tg.MessageFwdHeader, users map[int64]*tg.User) string {
+	if fwd.FromName != "" {
+		return fwd.FromName
+	}
+	if fwd.FromID != nil {
+		if uid := peerUserID(fwd.FromID); uid != 0 {
+			if u, ok := users[uid]; ok {
+				if name := userName(u); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func userName(u *tg.User) string {
+	name := u.FirstName
+	if u.LastName != "" {
+		if name != "" {
+			name += " "
+		}
+		name += u.LastName
+	}
+	return name
+}
+
+func indexChats(chats []tg.ChatClass) map[int64]tg.ChatClass {
+	m := make(map[int64]tg.ChatClass, len(chats))
+	for _, c := range chats {
+		m[c.GetID()] = c
+	}
+	return m
+}
+
+func peerID(peer tg.PeerClass) int64 {
+	switch p := peer.(type) {
+	case *tg.PeerUser:
+		return p.UserID
+	case *tg.PeerChat:
+		return p.ChatID
+	case *tg.PeerChannel:
+		return p.ChannelID
+	}
+	return 0
+}
+
+// SendOpts controls SendText: reply target, Markdown vs plain parsing, and an
+// optional expert --rich payload (JSON) sent via sendMessage.rich_message.
+type SendOpts struct {
+	ReplyTo  int
+	Plain    bool
+	RichJSON string
+}
+
+// parseText converts message text to body + entities, honoring the plain flag.
+func parseText(text string, plain bool) (string, []tg.MessageEntityClass, error) {
+	if plain {
+		return markup.ParsePlain(text)
+	}
+	return markup.Parse(text)
+}
+
+// randomID returns a non-zero cryptographically random int64 for message
+// deduplication (Telegram's random_id).
+func randomID() int64 {
+	var b [8]byte
+	for {
+		if _, err := rand.Read(b[:]); err != nil {
+			// crypto/rand should not fail; fall back to a time-derived seed.
+			return time.Now().UnixNano() | 1
+		}
+		id := int64(binary.LittleEndian.Uint64(b[:]))
+		if id != 0 {
+			return id
+		}
+	}
+}
+
+// sentResult extracts message_id + date from a send/edit/forward update,
+// pairing them with the given chat id in the tgc result shape.
+func sentResult(upd tg.UpdatesClass, chatID int64) map[string]any {
+	res := map[string]any{
+		"message_id": nil,
+		"chat_id":    chatID,
+		"date":       nil,
+	}
+	switch u := upd.(type) {
+	case *tg.UpdateShortSentMessage:
+		res["message_id"] = u.ID
+		res["date"] = time.Unix(int64(u.Date), 0).UTC().Format(time.RFC3339)
+	case *tg.Updates:
+		for _, up := range u.Updates {
+			var mc tg.MessageClass
+			switch nu := up.(type) {
+			case *tg.UpdateNewMessage:
+				mc = nu.Message
+			case *tg.UpdateNewChannelMessage:
+				mc = nu.Message
+			case *tg.UpdateEditMessage:
+				mc = nu.Message
+			case *tg.UpdateEditChannelMessage:
+				mc = nu.Message
+			default:
+				continue
+			}
+			if m, ok := mc.(*tg.Message); ok {
+				res["message_id"] = m.ID
+				res["date"] = time.Unix(int64(m.Date), 0).UTC().Format(time.RFC3339)
+				break
+			}
+		}
+	}
+	return res
+}
+
+// SendText sends a text message to selector, applying Markdown unless plain.
+func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]any, error) {
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, err
+	}
+	ip, err := resolve.InputPeer(conn, peer)
+	if err != nil {
+		return nil, err
+	}
+	body, entities, err := parseText(text, o.Plain)
+	if err != nil {
+		return nil, err
+	}
+
+	// setReplyTo applies the reply target to a request when requested.
+	setReplyTo := func(req *tg.MessagesSendMessageRequest) {
+		if o.ReplyTo > 0 {
+			req.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: o.ReplyTo})
+		}
+	}
+
+	// Path 1: explicit --rich payload. This is an expert request, so an RPC
+	// failure surfaces to the caller — no silent entities fallback.
+	if o.RichJSON != "" {
+		rm, err := markup.ParseRichJSON(json.RawMessage(o.RichJSON))
+		if err != nil {
+			return nil, err
+		}
+		req := &tg.MessagesSendMessageRequest{
+			Peer:     ip,
+			Message:  body,
+			RandomID: randomID(),
+		}
+		req.SetRichMessage(rm)
+		setReplyTo(req)
+		upd, err := conn.Ctx.Raw.MessagesSendMessage(conn.Ctx, req)
+		if err != nil {
+			return nil, client.WrapErr(err)
+		}
+		return sentResult(upd, peer.ID), nil
+	}
+
+	// Path 2: default (non-plain) — attempt rich_message, then transparently
+	// fall back to the Task 6 entities path once if the user-layer rejects it.
+	if !o.Plain {
+		req := &tg.MessagesSendMessageRequest{
+			Peer:     ip,
+			Message:  body,
+			RandomID: randomID(),
+		}
+		// InputRichMessageMarkdown expects the RAW Markdown source; parseText's
+		// body has already been rendered/stripped, so use the original text.
+		req.SetRichMessage(markup.TryRichMarkdown(text))
+		setReplyTo(req)
+		if upd, err := conn.Ctx.Raw.MessagesSendMessage(conn.Ctx, req); err == nil {
+			return sentResult(upd, peer.ID), nil
+		}
+		// Rich rejected: retry once with the plain entities path, no error surfaced.
+	}
+
+	// Path 3 (and rich fallback): entities path — today's behavior.
+	req := &tg.MessagesSendMessageRequest{
+		Peer:     ip,
+		Message:  body,
+		RandomID: randomID(),
+	}
+	if len(entities) > 0 {
+		req.SetEntities(entities)
+	}
+	setReplyTo(req)
+	upd, err := conn.Ctx.Raw.MessagesSendMessage(conn.Ctx, req)
+	if err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return sentResult(upd, peer.ID), nil
+}
+
+// EditText replaces the text of an existing message.
+func EditText(conn *client.Conn, selector string, msgID int, text string, plain bool) (map[string]any, error) {
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, err
+	}
+	ip, err := resolve.InputPeer(conn, peer)
+	if err != nil {
+		return nil, err
+	}
+	body, entities, err := parseText(text, plain)
+	if err != nil {
+		return nil, err
+	}
+	req := &tg.MessagesEditMessageRequest{
+		Peer:    ip,
+		ID:      msgID,
+		Message: body,
+	}
+	if len(entities) > 0 {
+		req.SetEntities(entities)
+	}
+	upd, err := conn.Ctx.Raw.MessagesEditMessage(conn.Ctx, req)
+	if err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return sentResult(upd, peer.ID), nil
+}
+
+// Delete removes messages. For channels it uses channels.deleteMessages (no
+// per-user option); elsewhere messages.deleteMessages with revoke = !forMe.
+func Delete(conn *client.Conn, selector string, ids []int, forMe bool) (map[string]any, error) {
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, err
+	}
+	if peer.Type == "channel" {
+		if forMe {
+			return nil, output.Errf("bad_args", "channels cannot delete messages only for you")
+		}
+		ch, err := resolve.InputChannel(peer)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := conn.Ctx.Raw.ChannelsDeleteMessages(conn.Ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: ch,
+			ID:      ids,
+		}); err != nil {
+			return nil, client.WrapErr(err)
+		}
+		return map[string]any{"status": "ok", "deleted": len(ids)}, nil
+	}
+	if _, err := conn.Ctx.Raw.MessagesDeleteMessages(conn.Ctx, &tg.MessagesDeleteMessagesRequest{
+		Revoke: !forMe,
+		ID:     ids,
+	}); err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return map[string]any{"status": "ok", "deleted": len(ids)}, nil
+}
+
+// Forward copies a single message from fromSel into toSel.
+func Forward(conn *client.Conn, fromSel string, msgID int, toSel string) (map[string]any, error) {
+	fromPeer, err := resolve.Resolve(conn, fromSel)
+	if err != nil {
+		return nil, err
+	}
+	fromIP, err := resolve.InputPeer(conn, fromPeer)
+	if err != nil {
+		return nil, err
+	}
+	toPeer, err := resolve.Resolve(conn, toSel)
+	if err != nil {
+		return nil, err
+	}
+	toIP, err := resolve.InputPeer(conn, toPeer)
+	if err != nil {
+		return nil, err
+	}
+	upd, err := conn.Ctx.Raw.MessagesForwardMessages(conn.Ctx, &tg.MessagesForwardMessagesRequest{
+		FromPeer: fromIP,
+		ToPeer:   toIP,
+		ID:       []int{msgID},
+		RandomID: []int64{randomID()},
+	})
+	if err != nil {
+		return nil, client.WrapErr(err)
+	}
+	return sentResult(upd, toPeer.ID), nil
+}

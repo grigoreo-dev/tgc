@@ -18,6 +18,7 @@ import (
 	"github.com/gotd/contrib/middleware/floodwait"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tgerr"
+	"golang.org/x/term"
 
 	"github.com/grigoreo-dev/tgc/internal/config"
 	"github.com/grigoreo-dev/tgc/internal/output"
@@ -120,8 +121,37 @@ func Connect(profileName string) (*Conn, error) {
 	return conn, nil
 }
 
+// isAuthRestart reports whether err is Telegram's AUTH_RESTART, the protocol
+// signal to discard the current auth state and start the flow over.
+func isAuthRestart(err error) bool {
+	return tgerr.Is(err, "AUTH_RESTART")
+}
+
+// resetSession removes a profile's persisted session state so the next auth
+// flow starts clean: the sqlite database (plus its WAL/SHM sidecars) and any
+// imported string session. Missing files are not an error.
+func resetSession(p *config.Profile) error {
+	paths := []string{
+		p.SessionPath,
+		p.SessionPath + "-wal",
+		p.SessionPath + "-shm",
+		filepath.Join(p.Dir, "session.txt"),
+	}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 // ConnectForLogin runs the auth flow: interactive terminal prompts for user
 // accounts, non-interactive for bot tokens. Persists profile type on success.
+//
+// If Telegram answers AUTH_RESTART (stale/partial auth state from a previous
+// interrupted attempt), the leftover session is cleared and the flow is
+// retried once transparently, so callers never have to delete session files
+// by hand.
 func ConnectForLogin(profileName, phone, botToken string) (*Conn, error) {
 	p, err := config.ResolveProfile(profileName)
 	if err != nil {
@@ -132,13 +162,26 @@ func ConnectForLogin(profileName, phone, botToken string) (*Conn, error) {
 	if bot {
 		secret, ptype = botToken, "bot"
 	}
-	conn, err := build(p, bot, secret, &gotgproto.ClientOpts{
-		Session:          sessionFor(p),
-		NoUpdates:        true,
-		DisableCopyright: true,
-		Middlewares:      middlewares(),
-		AuthConversator:  newTerminalConversator(),
-	})
+
+	attempt := func() (*Conn, error) {
+		return build(p, bot, secret, &gotgproto.ClientOpts{
+			Session:          sessionFor(p),
+			NoUpdates:        true,
+			DisableCopyright: true,
+			Middlewares:      middlewares(),
+			AuthConversator:  newTerminalConversator(),
+		})
+	}
+
+	conn, err := attempt()
+	if err != nil && isAuthRestart(err) {
+		// Telegram wants a clean slate: drop the partial session and retry once.
+		fmt.Fprintln(os.Stderr, "auth: AUTH_RESTART — clearing partial session and retrying")
+		if rerr := resetSession(p); rerr != nil {
+			return nil, rerr
+		}
+		conn, err = attempt()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +205,10 @@ func WrapErr(err error) error {
 	if tgerr.Is(err, "BOT_METHOD_INVALID") {
 		return output.Errf("bot_unsupported", "this command is not available for bot accounts")
 	}
+	if tgerr.Is(err, "RICH_MESSAGE_UNSUPPORTED") {
+		return output.Errf("rich_unsupported",
+			"rich messages are not supported for this account; omit --rich or send default Markdown")
+	}
 	return err
 }
 
@@ -176,8 +223,33 @@ func newTerminalConversator() *terminalConversator {
 }
 
 func (t *terminalConversator) prompt(label string) (string, error) {
+	return t.readAnswer(label, false, term.IsTerminal(int(os.Stdin.Fd())))
+}
+
+// promptSecret reads a sensitive answer (e.g. a 2FA password) without echoing
+// it to the terminal.
+func (t *terminalConversator) promptSecret(label string) (string, error) {
+	return t.readAnswer(label, true, term.IsTerminal(int(os.Stdin.Fd())))
+}
+
+// readAnswer prints label to stderr and reads one answer from stdin. When
+// secret is set and stdin is a real terminal, input is read with echo
+// disabled (via term.ReadPassword) so passwords never appear on screen or in
+// the scrollback. When stdin is not a TTY (piped input, automation, tests),
+// it falls back to a normal buffered read so those flows still work.
+func (t *terminalConversator) readAnswer(label string, secret, isTTY bool) (string, error) {
 	if _, err := fmt.Fprint(os.Stderr, label); err != nil {
 		return "", err
+	}
+	if secret && isTTY {
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		// ReadPassword consumes the newline but does not echo it; emit one so
+		// the next prompt/output starts on a fresh line.
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
 	}
 	s, err := t.in.ReadString('\n')
 	if err != nil {
@@ -205,7 +277,7 @@ func (t *terminalConversator) AskCode() (string, error) {
 
 func (t *terminalConversator) AskPassword() (string, error) {
 	t.retryNote(gotgproto.AuthStatusPasswordRetrial, "2FA password")
-	return t.prompt("2FA password: ")
+	return t.promptSecret("2FA password: ")
 }
 
 func (t *terminalConversator) AuthStatus(s gotgproto.AuthStatus) {
