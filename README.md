@@ -10,9 +10,41 @@ pass `--pretty` when a human is reading.
 
 ## Install
 
+Recommended (no Go required — downloads a release binary):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/grigoreo-dev/tgc/main/install.sh | sh
+```
+
+Env knobs: `TGC_VERSION=vX.Y.Z` for a specific version, `TGC_INSTALL_DIR` for a
+custom directory (default `~/.local/bin`), `GITHUB_TOKEN`/`GH_TOKEN` to avoid API
+rate limits.
+
+Prefer to inspect first? Download `install.sh`, read it, then run it.
+
+Alternative (requires Go 1.25+):
+
 ```sh
 go install github.com/grigoreo-dev/tgc/cmd/tgc@latest
 ```
+
+> A `go install` build reports version `dev` and does **not** auto-check for
+> updates or self-update. For automatic update checks and `tgc self update`,
+> install via the script above.
+
+### Updating
+
+```sh
+tgc self update    # download and install the latest release
+tgc self check     # report {"update_available":...} without installing
+```
+
+While a newer release is available, tgc prints a one-line
+`{"warning":"update_available",...}` to stderr on each run. Set
+`TGC_NO_UPDATE_CHECK=1` to disable the check entirely.
+
+> Security: releases are verified by sha256 checksum over HTTPS. Publisher
+> signature verification (cosign) is planned for a future release.
 
 ## Quick start
 

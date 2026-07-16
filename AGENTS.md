@@ -1,5 +1,12 @@
 # Agent Instructions
 
+## Updates
+
+tgc self-reports available updates. Agents may run `tgc self check` and react to
+`{"update_available":true,...}` on stdout, or notice the
+`{"warning":"update_available",...}` line tgc prints to stderr on each run.
+Run `tgc self update` to upgrade. Set `TGC_NO_UPDATE_CHECK=1` to silence the check.
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 > **Architecture in one line:** Issues live in a local Dolt database

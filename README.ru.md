@@ -10,9 +10,42 @@ MTProto через [gotgproto](https://github.com/celestix/gotgproto) и
 
 ## Установка
 
+Рекомендуемый способ (Go не нужен — скачивается бинарник релиза):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/grigoreo-dev/tgc/main/install.sh | sh
+```
+
+Переменные: `TGC_VERSION=vX.Y.Z` для конкретной версии, `TGC_INSTALL_DIR` для
+каталога установки (по умолчанию `~/.local/bin`), `GITHUB_TOKEN`/`GH_TOKEN`
+чтобы обойти лимиты API.
+
+Хотите сначала проверить скрипт? Скачайте `install.sh`, прочитайте его, затем
+запустите.
+
+Альтернатива (нужен Go 1.25+):
+
 ```sh
 go install github.com/grigoreo-dev/tgc/cmd/tgc@latest
 ```
+
+> Сборка через `go install` сообщает версию `dev` и **не** проверяет обновления
+> и не умеет self-update. Для автоматических проверок и `tgc self update`
+> устанавливайте через скрипт выше.
+
+### Обновление
+
+```sh
+tgc self update    # download and install the latest release
+tgc self check     # report {"update_available":...} without installing
+```
+
+Пока доступен более новый релиз, tgc при каждом запуске печатает в stderr
+одну строку `{"warning":"update_available",...}`. Установите
+`TGC_NO_UPDATE_CHECK=1`, чтобы полностью отключить проверку.
+
+> Безопасность: релизы проверяются по sha256-контрольной сумме по HTTPS.
+> Проверка подписи издателя (cosign) планируется в будущих релизах.
 
 ## Быстрый старт
 
