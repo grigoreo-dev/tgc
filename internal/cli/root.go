@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/grigoreo-dev/tgc/internal/output"
+	"github.com/grigoreo-dev/tgc/internal/selfupdate"
 	"github.com/grigoreo-dev/tgc/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -37,7 +38,13 @@ func Execute() {
 	rootCmd.PersistentFlags().BoolVar(&flagPretty, "pretty", false, "human-readable output")
 	rootCmd.Version = version.Version
 	rootCmd.SetVersionTemplate(`{"version":"{{.Version}}"}` + "\n")
-	cobra.OnInitialize(func() { output.SetPretty(flagPretty) })
+	cobra.OnInitialize(func() {
+		output.SetPretty(flagPretty)
+		// Skip the notify inside the background refresher to avoid recursion.
+		if os.Getenv("TGC_UPDATE_REFRESH") == "" {
+			selfupdate.StartupNotify(os.Stderr)
+		}
+	})
 	if err := rootCmd.Execute(); err != nil {
 		output.FailErr(err)
 	}
