@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+project_name: tgc
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - id: tgc
+    main: ./cmd/tgc
+    binary: tgc
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/grigoreo-dev/tgc/internal/version.Version={{.Version}}
+archives:
+  - id: tgc
+    formats: [tar.gz]
+    name_template: "tgc_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE*
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+release:
+  github:
+    owner: grigoreo-dev
+    name: tgc
+changelog:
+  use: github
