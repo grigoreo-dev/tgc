@@ -17,7 +17,14 @@ type CheckResult struct {
 	UpdateAvailable bool   `json:"update_available"`
 }
 
+// defaultClient is for small, fast calls (release JSON, checksums.txt): a
+// wall-clock timeout is a fine safety net there.
 func defaultClient() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
+
+// downloadClient is for the multi-MB binary download, where a global wall-clock
+// timeout would abort a legitimate slow transfer. The request's context (set by
+// the caller, e.g. `self update`'s 60s ctx) bounds it instead.
+func downloadClient() *http.Client { return &http.Client{} }
 
 // Check reports whether a newer release exists. No releases yet → not available.
 func Check(ctx context.Context) (*CheckResult, error) {
@@ -77,7 +84,7 @@ func Update(ctx context.Context) (*CheckResult, error) {
 	if cu == "" {
 		return nil, output.Errf("checksum", "release %s has no checksums.txt", rel.Tag)
 	}
-	bin, cleanup, err := downloadAndVerify(ctx, defaultClient(), asset, cu)
+	bin, cleanup, err := downloadAndVerify(ctx, downloadClient(), asset, cu)
 	if err != nil {
 		return nil, err
 	}
