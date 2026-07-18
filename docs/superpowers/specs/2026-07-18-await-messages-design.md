@@ -113,23 +113,62 @@ func Await(conn *client.Conn, selector string, o AwaitOpts) ([]map[string]any, b
 
 Algorithm:
 
-1. Resolve peer, build InputPeer.
-2. **Startup drain** (correctness, not optimization): read the accumulated unread
-   via `messages.getHistory` bounded by the dialog's read-pointer / `unread_count`
-   into the buffer. We do NOT rely on the dispatcher's getDifference to redeliver
-   already-unread messages, because getDifference is `pts`-relative, not
-   read-pointer-relative — a session whose `pts` is already current would report
-   an empty gap and never replay the standing unread.
-3. Register `handlers.NewMessage` on the dispatcher; inbound messages whose
-   `chat_id` matches our peer (and optional `--from`) append to the same buffer.
-   Filter to inbound only (`out == false`) — never echo our own messages.
-4. **Debounce timer**: each new message resets a `--debounce` timer.
-5. `select` over: debounce-fire (buffer non-empty) / timeout.
-6. debounce-fire → stop client, return buffer.
-7. timeout with empty buffer → return `(nil, true, nil)`.
+**Ordering matters — dispatcher first, then drain.** If we drained history first
+and *then* started the dispatcher, a message arriving in that gap would be lost
+(not in the drain, not yet live). So we start buffering live updates *before*
+reading history, and the two windows deliberately overlap; a `map[int]bool` on
+message id **deduplicates** the merge (a message straddling the seam may appear
+in both the drain and the live buffer).
 
-**mark-read** lives in `ops.MarkRead` (`messages.readHistory`, max_id = last
-message id); the CLI calls it **after** `output.Emit`.
+1. Resolve peer, build InputPeer.
+2. `ConnectWatch` — dispatcher is up and already buffering live inbound into the
+   channel.
+3. **Startup drain** (correctness, not optimization) — **user profiles only;
+   skipped entirely for bot profiles** (bots have no dialogs/read-pointer, so they
+   are live-only): read the accumulated unread deterministically:
+   a. `messages.getPeerDialogs([peer])` → `read_inbox_max_id`, `unread_count`,
+      `top_message`.
+   b. If `unread_count == 0` → buffer empty, go straight to live (no history call).
+   c. Else `messages.getHistory(peer, min_id = read_inbox_max_id, limit = min(unread_count, 100))`
+      → the unread inbound messages (cap 100 as a sanity ceiling).
+   d. Filter `id > read_inbox_max_id && out == false` (getHistory `min_id` is not
+      always strictly exclusive).
+
+   We do NOT rely on the dispatcher's getDifference to redeliver already-unread
+   messages, because getDifference is `pts`-relative, not read-pointer-relative —
+   a session whose `pts` is already current would report an empty gap and never
+   replay the standing unread. The read-pointer (`read_inbox_max_id`) is the
+   authoritative "what has the agent already seen" marker. Merge the drained
+   messages into the buffer, deduplicating by message id against anything the
+   live dispatcher already captured.
+4. Live messages continue arriving via `handlers.NewMessage`. A message is
+   accepted into the buffer only if **all** hold (the same filter chain applies to
+   both the live path and the startup drain):
+   - `peer == target` (matches our chat_id),
+   - `out == false` (inbound, not our own echo — matters for `send --await-reply`),
+   - it is a `*tg.Message`, not a `*tg.MessageService` (join/title/photo service
+     events are dropped — no text for the agent),
+   - if `--from` is set: `sender_id == resolve(--from)`.
+5. **Debounce timer**: each new accepted message resets a `--debounce` timer.
+6. `select` over: debounce-fire (buffer non-empty) / timeout deadline.
+7. debounce-fire → stop client, return buffer.
+8. **timeout deadline reached:**
+   - buffer **non-empty** → flush it now (return the batch), do NOT emit a
+     timeout marker. The deadline is a hard ceiling: debounce must never let the
+     deadline swallow already-received messages (race: message arrives at t=299
+     with a 2s debounce and a 300s deadline).
+   - buffer **empty** → return `(nil, true, nil)` (timeout marker).
+
+**mark-read** lives in `ops.MarkRead` (`messages.readHistory`, `max_id`); the CLI
+calls it **after** `output.Emit`. Two invariants (correctness, not detail):
+
+- `max_id` = the id of the **last message in the emitted batch**, never a
+  whole-chat read. A message that arrives after the buffer was sliced stays
+  unread and surfaces on the next `await` — no message is marked read without
+  being shown to the agent.
+- The watch client is **stopped before** `MarkRead`, so no new messages drip into
+  a dead buffer while readHistory runs.
+- **Bot profiles skip MarkRead** (no read state) — live-only, forward-only.
 
 **CLI** (`internal/cli`): new `await.go` command; `send.go` extended with
 `--await-reply` (after send, call the same `Await` + `MarkRead`).
@@ -141,8 +180,25 @@ Boundaries:
 - `ops.MarkRead` — read receipt.
 - `cli` — flags, output ordering, mark-read after print.
 
-gotgproto note: the dispatcher callback runs in its own goroutine, so the buffer
-is mutex-guarded; the debounce fires via a channel/`time.AfterFunc`.
+**Concurrency (single-owner goroutine, no mutex):** the dispatcher callback runs
+in its own goroutine but does the minimum — it only sends the message to a
+buffered `chan *tg.Message`. All state (buffer append, debounce timer reset,
+deadline check) lives in one `select` loop owned by the main goroutine:
+
+```go
+for {
+    select {
+    case m := <-msgCh:   buf = append(buf, m); timer.Reset(debounce)
+    case <-timer.C:      if len(buf) > 0 { return buf, false, nil } // debounce fire
+    case <-deadline.C:   if len(buf) > 0 { return buf, false, nil } // flush, not timeout
+                         return nil, true, nil                       // empty → timeout
+    }
+}
+```
+
+The buffer is touched by exactly one goroutine, so there is no mutex and no data
+race by construction. The event channel is also the clean seam for unit tests
+(feed `*tg.Message` structs, assert batching/debounce/timeout).
 
 ## 4. Errors & edge cases
 
@@ -150,7 +206,7 @@ is mutex-guarded; the debounce fires via a channel/`time.AfterFunc`.
 |---|---|
 | not_authenticated | structured error, exit 1 (as everywhere) |
 | timeout, empty | `{"status":"timeout"}`, **exit 0** (normal outcome, not error) |
-| bot profile | v1: `bad_args` "await requires a user profile" (bots deferred) |
+| bot profile | **live-only**: dispatcher works for bots, so `await` / `--await-reply` catch *future* incoming, but the startup drain (needs `getPeerDialogs`/`read_inbox_max_id`, which bots lack) and mark-read (bots have no read state) are **skipped**. A bot waits forward-only; messages sent before the wait started are not backfilled. No error. |
 | `--from` unresolvable | `not_found` before waiting (fail fast) |
 | chat empty then new msg | wait, catch live, emit |
 | mark-read fails | messages already emitted/received; best-effort, log to stderr, exit on print success (next await may re-show — acceptable) |
@@ -158,6 +214,8 @@ is mutex-guarded; the debounce fires via a channel/`time.AfterFunc`.
 | FLOOD_WAIT | existing middleware (≤30s auto-retry) covers read/getHistory |
 | media-group (album) | arrives as N `UpdateNewMessage` near-simultaneously → debounce coalesces into one batch (the motivating case) |
 | own message echo | dispatcher may deliver outgoing; filtered out (`out == false`) |
+| `send --await-reply` send fails | if the send itself errors (flood, PEER_ID_INVALID, …), propagate that error and exit 1 — do **not** enter the wait (nothing was sent to reply to) |
+| `--debounce` > `--timeout` | the deadline is a hard ceiling, so debounce is effectively capped by timeout: at the deadline a non-empty buffer flushes (branch: debounce↔timeout) |
 
 Security:
 
@@ -168,6 +226,24 @@ Security:
 - Relation to future read-only mode (tgc-ayp): `await` reads but mark-read
   mutates; when read-only lands, `await` stays allowed, possibly with
   `--no-mark-read`. Not built now, only noted.
+- **Invariant:** the watch client is **always** closed via `defer conn.Close()`
+  in the CLI wrapper — including on panic in a dispatcher callback or on timeout —
+  so a long-lived connection/session is never left dangling. `ConnectWatch` lives
+  at most `--timeout` (≤300s default); it is not a daemon.
+
+## Scale / concurrency limit (documented)
+
+Two concurrent `await`/`watch` on the **same profile** is **not supported** in v1.
+A profile is a single MTProto session (SQLite `session.db`); two `NoUpdates:false`
+consumers on one auth key compete for the same updates state (`pts`) — Telegram
+delivers each update once, so the two would steal updates from each other, and the
+session DB would see concurrent writers.
+
+This is fine for the actual use case: an agent loop calls `await` **sequentially**
+(one conversational turn at a time). Genuinely parallel agents should use
+**separate profiles** (local `./.tgc` already encourages this). No lockfile in v1
+(YAGNI); if a hard guarantee is later needed, file a separate bead for a
+profile-level session lock (second `await` waits or fails `busy`).
 
 ## 5. Testing
 
@@ -205,3 +281,38 @@ Pure functions to isolate from gotgproto:
 - buffer + debounce + filter → independent of `*client.Conn`, takes event structs
   → fully unit-testable.
 - connect / dispatcher / mark-read → thin wrappers, verified live.
+
+## Stress Test Results: await-messages design
+
+### Resolved Decisions
+- **Startup drain**: explicit `getPeerDialogs` (read_inbox_max_id, unread_count) → `getHistory(min_id, cap 100)`, not a vague "getHistory by read-pointer".
+- **Debounce↔timeout**: deadline is a hard ceiling — non-empty buffer flushes at the deadline; timeout marker only when the buffer is empty. No lost message at t=299 with a 2s debounce.
+- **mark-read**: strictly `max_id = last emitted message`, never whole-chat; client stopped before MarkRead. Messages after the slice stay unread → next await.
+- **Concurrency**: single-owner goroutine + buffered channel (callback only sends); no mutex, no data race by construction; channel is the unit-test seam.
+- **Filter chain**: `peer==target && out==false && *tg.Message (drop MessageService) && (--from if set)`, applied to both live and startup drain.
+- **Lifecycle ordering**: dispatcher-first, then drain; windows overlap; dedup by message id on merge — closes the seam-gap.
+- **Security**: no new vuln (read-receipts documented, AccessHash not emitted); invariant added — watch client always closed via defer (panic/timeout safe); not a daemon (≤ timeout).
+- **Scale**: two concurrent watch on one profile NOT supported in v1 (documented); parallel agents use separate profiles; session-lock deferred to a future bead.
+- **Bot profile**: live-only — dispatcher works, but startup drain + mark-read skipped (bots lack dialogs/read-pointer/read-state); forward-only, no error.
+
+### Changes Made
+- Startup-drain algorithm made explicit (2-step, cap 100, filter).
+- Deadline-as-hard-ceiling flush rule for non-empty buffer.
+- mark-read max_id + stop-before-read invariants.
+- Single-owner-goroutine concurrency model (removed mutex).
+- Filter chain incl. MessageService drop, in both paths.
+- Dispatcher-first ordering + id dedup.
+- defer-close security invariant.
+- Concurrency limit section (no lockfile v1).
+- Bot live-only behavior (replaces hard bad_args).
+- Reflexion: `send --await-reply` send-failure → propagate, don't wait; `--debounce`>`--timeout` capped by deadline.
+
+### Deferred / Parking Lot
+- Global inbox / `--follow` / edit-delete events (out of v1 scope).
+- Profile-level session lock for concurrent watch (file bead if needed).
+- Bot startup-drain/backfill (needs bot-specific mechanism).
+- `--no-mark-read` when read-only mode (tgc-ayp) lands.
+
+### Confidence Assessment
+- Overall: High.
+- Areas of concern: gotgproto dispatcher exact API for per-peer NewMessage filtering + graceful stop mid-wait — verify against the library during implementation (thin wrapper, live-tested via the bot harness).
