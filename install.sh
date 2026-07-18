@@ -84,6 +84,10 @@ DIR="${TGC_INSTALL_DIR:-$HOME/.local/bin}"
 if [ "$DIR" = "/usr/local/bin" ] && [ ! -w "$DIR" ]; then
   if have sudo && [ -e /dev/tty ]; then
     info "Installing to /usr/local/bin (sudo)..."
+    # SC2024: the </dev/tty redirect is intentionally applied by the current
+    # user (who owns the tty), not root — it feeds sudo's password prompt when
+    # this script runs via `curl | sh` and stdin is the pipe. Not a bug.
+    # shellcheck disable=SC2024
     sudo mv "${TMP}/${BINARY}" "${DIR}/${BINARY}" </dev/tty || err "sudo install failed"
     info "Installed ${BINARY} to ${DIR}/${BINARY}"
     exit 0
