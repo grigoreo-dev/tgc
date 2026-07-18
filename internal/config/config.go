@@ -223,6 +223,21 @@ func homeDir() string {
 	return h
 }
 
+// LocalDir returns the walk-up ./.tgc result regardless of TGC_CONFIG_DIR.
+// It is "" when no local .tgc exists in range. Used to surface a shadowed
+// local dir in diagnostics.
+func LocalDir() string { return findLocalDir() }
+
+// EnsureLocalGitignore writes a "*" .gitignore into a local .tgc directory when
+// missing. Best-effort and silent: it never returns an error and prints nothing,
+// preserving the JSONL/stderr output contract.
+func EnsureLocalGitignore(tgcDir string) {
+	gi := filepath.Join(tgcDir, ".gitignore")
+	if _, err := os.Stat(gi); os.IsNotExist(err) {
+		_ = os.WriteFile(gi, []byte("*\n"), 0o600)
+	}
+}
+
 // findLocalDir walks up from the current working directory looking for a
 // directory that contains a ".tgc" subdirectory. The nearest match wins. The
 // climb stops after inspecting $HOME (when known) or the filesystem root. It is
