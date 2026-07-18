@@ -130,6 +130,25 @@ profile stores its session under the config directory, and a profile is either a
 user login or a bot login. This lets you keep, say, a personal account and a bot
 side by side and switch between them per command.
 
+## Local project config (`./.tgc`)
+
+Run `tgc init` in a project directory to create a local `./.tgc` config, so that
+directory (and its subdirectories) uses its own default account:
+
+    tgc init --profile work
+    tgc auth login
+
+tgc discovers config in this order: `TGC_CONFIG_DIR` → the nearest `./.tgc`
+walking up from the current directory (stopping at `$HOME`) → `~/.config/tgc`.
+A shared parent `workspace/.tgc` covers all subprojects; a nearer `./.tgc`
+overrides it.
+
+`tgc init` writes `.tgc/.gitignore` (`*`) so sessions are never committed, and
+inherits `api_id`/`api_hash` from your global config if set. Inspect the active
+config with:
+
+    tgc config path
+
 ## Bot-mode limits
 
 A bot account can't list dialogs or run a global chat search — both return
