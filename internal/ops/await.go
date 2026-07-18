@@ -1,6 +1,11 @@
 package ops
 
 import (
+	"time"
+
+	"github.com/celestix/gotgproto/dispatcher/handlers"
+	"github.com/celestix/gotgproto/dispatcher/handlers/filters"
+	"github.com/celestix/gotgproto/ext"
 	"github.com/gotd/td/tg"
 
 	"github.com/grigoreo-dev/tgc/internal/client"
@@ -38,4 +43,175 @@ func MarkRead(conn *client.Conn, selector string, maxID int) error {
 		MaxID: maxID,
 	})
 	return client.WrapErr(err)
+}
+
+// acceptMessage is the filter chain shared by live + drain: inbound, from the
+// target peer, optionally from a specific sender (fromID>0). Service messages
+// are filtered separately in the live path (via types.Message.IsService).
+func acceptMessage(m *tg.Message, target int64, fromID int64) bool {
+	if m == nil || m.Out {
+		return false
+	}
+	if peerID(m.PeerID) != target {
+		return false
+	}
+	if fromID > 0 {
+		if m.FromID == nil || peerUserID(m.FromID) != fromID {
+			return false
+		}
+	}
+	return true
+}
+
+// AwaitOpts controls Await: the overall deadline, the quiet-period debounce
+// that closes a burst, and an optional sender selector ("" = any sender).
+type AwaitOpts struct {
+	Timeout  time.Duration
+	Debounce time.Duration
+	From     string
+}
+
+// Await blocks until the target's unread messages arrive (debounced) or the
+// deadline fires. Returns (messages oldest→newest, lastID, chatID, timedOut,
+// error). lastID is the max message id in the batch (0 when empty) for MarkRead.
+// User profiles get a deterministic startup drain of standing unread; bot
+// profiles are live-only. The caller owns conn lifecycle (defer Close).
+//
+// Invariant: Await registers exactly one dispatcher handler and assumes ONE
+// call per connection (the process is short-lived: connect → Await → exit).
+// Calling Await twice on the same conn is unsupported (would double-register).
+func Await(conn *client.Conn, selector string, o AwaitOpts) ([]map[string]any, int, int64, bool, error) {
+	peer, err := resolve.Resolve(conn, selector)
+	if err != nil {
+		return nil, 0, 0, false, err
+	}
+	target := peer.ID
+
+	var fromID int64
+	if o.From != "" {
+		fp, err := resolve.Resolve(conn, o.From)
+		if err != nil {
+			return nil, 0, 0, false, err
+		}
+		fromID = fp.ID
+	}
+
+	ev := make(chan awaitEvent, 64)
+
+	// Register live handler BEFORE the drain so the windows overlap; collectBatch
+	// dedups by id. The gotgproto callback runs on its own goroutine and only
+	// sends on ev (non-blocking), so it never contends with the drain or the
+	// buffer loop.
+	handler := handlers.NewMessage(filters.Message.All, func(_ *ext.Context, u *ext.Update) error {
+		tm := u.EffectiveMessage
+		if tm == nil || tm.IsService || tm.Message == nil {
+			return nil
+		}
+		raw := tm.Message // embedded *tg.Message
+		if !acceptMessage(raw, target, fromID) {
+			return nil
+		}
+		// Best-effort sender enrichment so live output matches read's shape.
+		users := map[int64]*tg.User{}
+		if su := u.EffectiveUser(); su != nil {
+			users[su.ID] = su
+		}
+		select {
+		case ev <- awaitEvent{ID: raw.ID, Msg: messageToMap(raw, users, nil, target)}:
+		default:
+		}
+		return nil
+	})
+	handler.Outgoing = false
+	conn.Client.Dispatcher.AddHandler(handler)
+
+	// Startup drain (user profiles only). Bots have no standing unread window to
+	// replay, and messages.getPeerDialogs is a user-layer method.
+	if conn.Profile == nil || conn.Profile.Type != "bot" {
+		if err := drainUnread(conn, peer, target, fromID, ev); err != nil {
+			return nil, 0, 0, false, err
+		}
+	}
+
+	deadline := time.After(o.Timeout)
+	batch, timedOut := collectBatch(ev, o.Debounce, deadline)
+
+	lastID := 0
+	for _, m := range batch {
+		if id, ok := m["id"].(int); ok && id > lastID {
+			lastID = id
+		}
+	}
+	return batch, lastID, target, timedOut, nil
+}
+
+// drainUnread pre-seeds ev with the standing unread messages for a user peer.
+func drainUnread(conn *client.Conn, peer *resolve.Peer, target, fromID int64, ev chan<- awaitEvent) error {
+	ip, err := resolve.InputPeer(conn, peer)
+	if err != nil {
+		return err
+	}
+	pd, err := conn.Ctx.Raw.MessagesGetPeerDialogs(conn.Ctx, []tg.InputDialogPeerClass{
+		&tg.InputDialogPeer{Peer: ip},
+	})
+	if err != nil {
+		return client.WrapErr(err)
+	}
+	var readMax, unread int
+	for _, d := range pd.Dialogs {
+		if dd, ok := d.(*tg.Dialog); ok {
+			readMax = dd.ReadInboxMaxID
+			unread = dd.UnreadCount
+		}
+	}
+	if unread <= 0 {
+		return nil // unread_count is only a gate; do not trust it as an exact limit
+	}
+	// Fixed ceiling, NOT min(unread,100): unread_count may under-count (service
+	// events, reactions), and MinID already excludes everything <= readMax, so a
+	// larger limit is harmless while a too-small one would drop real unread.
+	res, err := conn.Ctx.Raw.MessagesGetHistory(conn.Ctx, &tg.MessagesGetHistoryRequest{
+		Peer: ip, MinID: readMax, Limit: 100,
+	})
+	if err != nil {
+		return client.WrapErr(err)
+	}
+	msgs, users, chats := historyMessages(res) // ascending + user/chat index
+	for _, mc := range msgs {
+		m, ok := mc.(*tg.Message)
+		if !ok || m.ID <= readMax {
+			continue
+		}
+		if !acceptMessage(m, target, fromID) {
+			continue
+		}
+		select {
+		case ev <- awaitEvent{ID: m.ID, Msg: messageToMap(m, users, chats, target)}:
+		default:
+		}
+	}
+	return nil
+}
+
+// historyMessages extracts messages ascending (oldest first) plus the user/chat
+// indexes from a history response (reuses indexUsers/indexChats from messages.go).
+func historyMessages(res tg.MessagesMessagesClass) ([]tg.MessageClass, map[int64]*tg.User, map[int64]tg.ChatClass) {
+	var (
+		msgs  []tg.MessageClass
+		users []tg.UserClass
+		chats []tg.ChatClass
+	)
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		msgs, users, chats = r.Messages, r.Users, r.Chats
+	case *tg.MessagesMessagesSlice:
+		msgs, users, chats = r.Messages, r.Users, r.Chats
+	case *tg.MessagesChannelMessages:
+		msgs, users, chats = r.Messages, r.Users, r.Chats
+	}
+	// getHistory returns newest-first; reverse to oldest-first.
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	return msgs, indexUsers(users), indexChats(chats)
 }
