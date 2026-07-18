@@ -136,6 +136,40 @@ func Connect(profileName string) (*Conn, error) {
 	return conn, nil
 }
 
+// ConnectWatch is like Connect but enables updates (NoUpdates:false) so the
+// gotgproto dispatcher delivers incoming messages to registered handlers. The
+// caller MUST defer conn.Close(). It never prompts: an invalid/absent session
+// yields a structured "not_authenticated" error.
+func ConnectWatch(profileName string) (*Conn, error) {
+	p, err := config.ResolveProfile(profileName)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := build(p, p.Type == "bot", "", &gotgproto.ClientOpts{
+		Session:          sessionFor(p),
+		NoUpdates:        false,
+		NoAutoAuth:       true,
+		DisableCopyright: true,
+		Middlewares:      middlewares(),
+	})
+	if err != nil {
+		var oe *output.Error
+		if output.AsError(err, &oe) {
+			return nil, err
+		}
+		if isNotAuthenticated(err) {
+			dir, source := config.DirSource()
+			local := ""
+			if source == "local" {
+				local = dir
+			}
+			return nil, output.Errf("not_authenticated", "%s", notAuthenticatedMsg(p.Name, local))
+		}
+		return nil, err
+	}
+	return conn, nil
+}
+
 // isAuthRestart reports whether err is Telegram's AUTH_RESTART, the protocol
 // signal to discard the current auth state and start the flow over.
 func isAuthRestart(err error) bool {
