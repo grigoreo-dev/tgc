@@ -1,4 +1,4 @@
-# ADR-0003: Local `./.tgc` discovery walks up to `$HOME`, not bounded by git-root
+# ADR-0003: Local `./.tgc` discovery walks up toward `$HOME` (exclusive), not bounded by git-root
 
 **Date:** 2026-07-18
 **Status:** Accepted
@@ -30,8 +30,9 @@ A git-root boundary breaks this: from `projectA/`, the walk would stop at
 
 ## Decision
 
-Walk-up ascends from CWD to `$HOME` (inclusive) — or FS root when CWD is outside
-`$HOME` or `$HOME` is unset — and is **NOT** bounded by git-root. It must be able
+Walk-up ascends from CWD toward `$HOME` but stops **before** inspecting `$HOME`
+itself (`$HOME`-exclusive) — or FS root when CWD is outside `$HOME` or `$HOME`
+is unset — and is **NOT** bounded by git-root. It must be able
 to climb past a subproject's `.git` to find a shared parent `workspace/.tgc`. The
 **nearest** `.tgc` wins, so a `projectA/.tgc` still overrides a `workspace/.tgc`
 above it.
@@ -41,6 +42,12 @@ above it.
 - The shared-`workspace/.tgc` covering many sibling git subprojects is the
   primary real-world use case; a git boundary would defeat it.
 - "Nearest wins" preserves per-subproject override when genuinely wanted.
+- The ceiling is `$HOME`-**exclusive** because tgc creates `~/.tgc/downloads` as
+  its default download root, so `$HOME/.tgc` almost always already exists and is
+  NOT a config dir. Inspecting `$HOME` inclusively would hijack every command run
+  under `$HOME` (with no nearer `.tgc`) away from the global `~/.config/tgc`,
+  silently breaking existing users. A config that lives at `$HOME` belongs in
+  `~/.config/tgc`. (Found in whole-branch review, finding C1.)
 - `$HOME`/FS-root is a predictable, well-understood ceiling; it never climbs past
   the user's home.
 - Consistency with the mental model of "one shared config for a tree of projects"

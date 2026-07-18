@@ -139,9 +139,11 @@ directory (and its subdirectories) uses its own default account:
     tgc auth login
 
 tgc discovers config in this order: `TGC_CONFIG_DIR` → the nearest `./.tgc`
-walking up from the current directory (stopping at `$HOME`) → `~/.config/tgc`.
-A shared parent `workspace/.tgc` covers all subprojects; a nearer `./.tgc`
-overrides it.
+walking up from the current directory (not past your home directory) →
+`$XDG_CONFIG_HOME/tgc` → `~/.config/tgc`. A shared parent `workspace/.tgc`
+covers all subprojects; a nearer `./.tgc` overrides it. A `.tgc` directly in
+your home directory is not used as local config (that is what `~/.config/tgc`
+is for).
 
 `tgc init` writes `.tgc/.gitignore` (`*`) so sessions are never committed, and
 inherits `api_id`/`api_hash` from your global config if set. Inspect the active

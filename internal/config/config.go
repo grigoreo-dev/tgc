@@ -256,14 +256,19 @@ func findLocalDirFrom(start string) string {
 	home := homeDir()
 	dir := start
 	for {
+		// Stop BEFORE inspecting $HOME itself. tgc creates ~/.tgc/downloads as
+		// its default download root, so $HOME/.tgc almost always exists and is
+		// NOT a config dir — treating it as local would hijack every command run
+		// under $HOME away from the global ~/.config/tgc. The boundary is
+		// therefore $HOME-exclusive: a config at $HOME belongs in ~/.config/tgc.
+		if home != "" && dir == home {
+			return ""
+		}
 		candidate := filepath.Join(dir, ".tgc")
 		if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
 			return candidate
 		}
 		// stat error (missing/permission) => keep climbing, never fatal.
-		if home != "" && dir == home {
-			return "" // inspected $HOME inclusively; stop.
-		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			return "" // reached FS root.

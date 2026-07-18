@@ -310,3 +310,50 @@ func TestDirGlobalFallback(t *testing.T) {
 		t.Fatalf("DirSource global: got %s", source)
 	}
 }
+
+// TestHomeTgcNotCaptured is the C1 regression guard: tgc creates ~/.tgc as its
+// download root, so $HOME/.tgc must NEVER be treated as a local config dir —
+// otherwise every command run under $HOME (with no nearer .tgc) would be
+// hijacked away from the global ~/.config/tgc, breaking existing users.
+func TestHomeTgcNotCaptured(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("TGC_CONFIG_DIR", "")
+	// Simulate the pre-existing download root.
+	if err := os.MkdirAll(filepath.Join(home, ".tgc", "downloads"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Work in a subdir of $HOME with no nearer .tgc.
+	work := filepath.Join(home, "proj")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, work)
+
+	if got := findLocalDirFrom(work); got != "" {
+		t.Fatalf("$HOME/.tgc must not be captured as local, got %q", got)
+	}
+	dir, source := DirSource()
+	want := filepath.Join(home, ".config", "tgc")
+	if source != "global" || dir != want {
+		t.Fatalf("want global %s, got %s/%s", want, source, dir)
+	}
+	// And self-heal must NOT have dropped a .gitignore into the download root.
+	if _, err := os.Stat(filepath.Join(home, ".tgc", ".gitignore")); err == nil {
+		t.Fatal("self-heal wrote .gitignore into ~/.tgc download root")
+	}
+}
+
+// TestFindLocalDirStartAtHome guards the edge where CWD is exactly $HOME:
+// $HOME/.tgc is still not local.
+func TestFindLocalDirStartAtHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".tgc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := findLocalDirFrom(home); got != "" {
+		t.Fatalf("start==$HOME: want empty, got %q", got)
+	}
+}

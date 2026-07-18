@@ -20,14 +20,12 @@ var configPathCmd = &cobra.Command{
 	},
 }
 
-// runConfigPath reports the active config dir, its source, the selected profile,
-// and — when env shadows an existing local .tgc — the shadowed local path.
+// runConfigPath reports the active config dir, its source, the effective
+// profile, and — when env shadows an existing local .tgc — the shadowed local
+// path.
 func runConfigPath() map[string]any {
 	dir, source := config.DirSource()
-	profile := ProfileName()
-	if profile == "" {
-		profile = "default"
-	}
+	profile := effectiveProfile()
 	res := map[string]any{
 		"config_dir": dir,
 		"source":     source,
@@ -39,6 +37,20 @@ func runConfigPath() map[string]any {
 		}
 	}
 	return res
+}
+
+// effectiveProfile resolves the profile the way ResolveProfile does, but
+// read-only (no directory creation): explicit --profile/TGC_PROFILE, then the
+// active config's default_profile, then "default". This mirrors the real
+// resolution so `tgc config path` reports the profile that commands will use.
+func effectiveProfile() string {
+	if p := ProfileName(); p != "" {
+		return p
+	}
+	if c, err := config.Load(); err == nil && c.DefaultProfile != "" {
+		return c.DefaultProfile
+	}
+	return "default"
 }
 
 func init() {

@@ -31,8 +31,9 @@ its own project directory automatically gets its own account.
 
 1. **Priority:** `TGC_CONFIG_DIR` (env) > walk-up `./.tgc` > `$XDG_CONFIG_HOME/tgc` > `~/.config/tgc`.
    Env stays highest so existing scripts/CI are unaffected.
-2. **Walk-up boundary:** ascend from CWD up to and including `$HOME` (or FS root,
-   whichever is reached first — CWD may live outside `$HOME`, e.g. `/srv`, docker,
+2. **Walk-up boundary:** ascend from CWD toward `$HOME` but stop BEFORE inspecting
+   `$HOME` itself (`$HOME`-exclusive), or at FS root
+   (whichever is reached first — CWD may live outside `$HOME`, e.g. `/srv`, docker,
    `/root/workspace`), then stop. NOT bounded by git-root: a single
    `workspace/.tgc` is intended to cover many sibling git subprojects, so the
    walk-up must be able to climb past a subproject's `.git`. The **nearest**
@@ -67,14 +68,16 @@ The single change point is `config.Dir()`. New order:
 
 ```
 1. TGC_CONFIG_DIR        (env override)
-2. walk-up ./.tgc        (CWD → $HOME inclusive; first existing .tgc dir; READ ONLY)
+2. walk-up ./.tgc        (CWD → $HOME EXCLUSIVE; first existing .tgc dir; READ ONLY)
 3. $XDG_CONFIG_HOME/tgc
 4. ~/.config/tgc
 ```
 
 New helper `findLocalDir() string`:
 - start at `os.Getwd()`
-- ascend via `filepath.Dir` until reaching `$HOME` (inclusive) or FS root
+- ascend via `filepath.Dir`, stopping BEFORE `$HOME` (exclusive) or at FS root.
+  `$HOME`-exclusive because tgc's own `~/.tgc/downloads` download root makes
+  `$HOME/.tgc` almost always exist and is NOT a config dir (whole-branch review C1)
 - at each level, if `<dir>/.tgc` exists and is a directory, return it (nearest wins)
 - NOT bounded by git-root — must climb past a subproject `.git` to find a shared
   `workspace/.tgc`
@@ -153,7 +156,10 @@ message names the local context: "profile X in local ./.tgc has no session; run
 
 ## Backwards compatibility
 
-- No `./.tgc` anywhere in CWD..$HOME → behavior identical to today (global).
+- No `./.tgc` anywhere in CWD..(below $HOME) → behavior identical to today (global).
+  The walk-up is `$HOME`-exclusive specifically so the pre-existing
+  `~/.tgc/downloads` download root is never mistaken for a config dir — existing
+  users keep resolving to `~/.config/tgc`.
 - `TGC_CONFIG_DIR` remains highest priority → existing scripts/CI unaffected.
 - No change to config.toml format, profiles, or session storage.
 
@@ -187,7 +193,8 @@ message names the local context: "profile X in local ./.tgc has no session; run
 Bead: tgc-1ax. 9 branches interrogated (8 modified, 1 agreed).
 
 ### Resolved Decisions
-- **Walk-up boundary:** `$HOME` or FS-root, whichever first. **git-root REJECTED**
+- **Walk-up boundary:** `$HOME`-EXCLUSIVE or FS-root, whichever first (amended
+  after whole-branch review C1 — see below). **git-root REJECTED**
   as a boundary — a shared `workspace/.tgc` must cover many sibling git
   subprojects, so walk-up must climb past a subproject `.git`. Nearest `.tgc` wins.
 - **Security:** `.gitignore`=`*` plus silent self-heal when a local `.tgc` lacks it.
@@ -220,3 +227,20 @@ Bead: tgc-1ax. 9 branches interrogated (8 modified, 1 agreed).
 - Overall: High.
 - Areas of concern: none blocking. The shared-`workspace/.tgc` + concurrent-agent
   scenario is the least-exercised path; atomic writes + tests mitigate it.
+
+## Whole-Branch Review Fixes (post-implementation)
+
+Final whole-branch code review (bead tgc-ka6.1) found two issues the per-task
+reviews structurally couldn't:
+
+- **C1 (Critical, fixed):** the original `$HOME`-inclusive boundary collided with
+  tgc's own `~/.tgc/downloads` download root. Any existing user who ever ran
+  `tgc download` would, after upgrade, have every command under `$HOME` resolve
+  to `~/.tgc` (`source=local`) instead of `~/.config/tgc`, making their sessions
+  unreachable (`not_authenticated`). **Fix:** walk-up boundary is now
+  `$HOME`-EXCLUSIVE — `$HOME/.tgc` is never treated as local. Regression tests:
+  `TestHomeTgcNotCaptured`, `TestFindLocalDirStartAtHome`.
+- **I1 (Important, fixed):** `tgc config path` reported `profile:"default"` even
+  when the active local `config.toml` set `default_profile`. **Fix:**
+  `effectiveProfile()` now reads the active config's `default_profile`
+  (read-only). Regression test: `TestConfigPathReportsDefaultProfileFromConfig`.
