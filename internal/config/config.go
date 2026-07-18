@@ -24,16 +24,28 @@ type Profile struct {
 	Type        string // "user", "bot", or "" (not logged in yet)
 }
 
-// Dir returns the tgc config root, honoring TGC_CONFIG_DIR and XDG_CONFIG_HOME.
+// Dir returns the tgc config root. Priority: TGC_CONFIG_DIR, then a local
+// ./.tgc discovered by walking up from CWD, then $XDG_CONFIG_HOME/tgc, then
+// ~/.config/tgc.
 func Dir() string {
+	dir, _ := DirSource()
+	return dir
+}
+
+// DirSource returns the active config dir and how it was chosen:
+// "env" | "local" | "global".
+func DirSource() (string, string) {
 	if d := os.Getenv("TGC_CONFIG_DIR"); d != "" {
-		return d
+		return d, "env"
+	}
+	if d := findLocalDir(); d != "" {
+		return d, "local"
 	}
 	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		return filepath.Join(x, "tgc")
+		return filepath.Join(x, "tgc"), "global"
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "tgc")
+	return filepath.Join(home, ".config", "tgc"), "global"
 }
 
 func configPath() string { return filepath.Join(Dir(), "config.toml") }

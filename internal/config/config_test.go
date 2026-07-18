@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+}
+
 func withTempConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -170,5 +182,60 @@ func TestFindLocalDirIgnoresFileAndMissing(t *testing.T) {
 	}
 	if got := findLocalDirFrom(sub); got != "" {
 		t.Fatalf(".tgc-as-file must be ignored, got %q", got)
+	}
+}
+
+func TestDirLocalBeatsGlobalButNotEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "") // force ~/.config path for global
+	// Create a local .tgc under a working dir, and chdir into it.
+	proj := filepath.Join(home, "proj")
+	local := filepath.Join(proj, ".tgc")
+	if err := os.MkdirAll(local, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, proj)
+
+	// No env override: local wins.
+	t.Setenv("TGC_CONFIG_DIR", "")
+	if got := Dir(); got != local {
+		t.Fatalf("local should win: want %s, got %s", local, got)
+	}
+	dir, source := DirSource()
+	if dir != local || source != "local" {
+		t.Fatalf("DirSource local: got %s/%s", dir, source)
+	}
+
+	// Env override wins over local.
+	envDir := t.TempDir()
+	t.Setenv("TGC_CONFIG_DIR", envDir)
+	if got := Dir(); got != envDir {
+		t.Fatalf("env should win: want %s, got %s", envDir, got)
+	}
+	_, source = DirSource()
+	if source != "env" {
+		t.Fatalf("DirSource env: got %s", source)
+	}
+}
+
+func TestDirGlobalFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("TGC_CONFIG_DIR", "")
+	// chdir somewhere with no .tgc anywhere up to home.
+	work := filepath.Join(home, "empty")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, work)
+	want := filepath.Join(home, ".config", "tgc")
+	if got := Dir(); got != want {
+		t.Fatalf("global fallback: want %s, got %s", want, got)
+	}
+	_, source := DirSource()
+	if source != "global" {
+		t.Fatalf("DirSource global: got %s", source)
 	}
 }
