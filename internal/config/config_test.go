@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -136,6 +137,55 @@ func TestAPICredentialsMissing(t *testing.T) {
 	_, _, err := APICredentials(c)
 	if err == nil {
 		t.Fatal("want error when no credentials anywhere")
+	}
+}
+
+func TestSaveIsAtomicNoTempLeft(t *testing.T) {
+	dir := withTempConfig(t)
+	if err := Save(&Config{DefaultProfile: "p", APIID: 7, APIHash: "h"}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load()
+	if err != nil || c.APIID != 7 {
+		t.Fatalf("roundtrip: %+v err=%v", c, err)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".tmp" || strings.Contains(e.Name(), ".tmp") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestGlobalCredentialsIgnoresLocalAndEnvDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("TGC_CONFIG_DIR", "")
+	t.Setenv("TGC_API_ID", "")
+	t.Setenv("TGC_API_HASH", "")
+
+	// Write global config with creds.
+	globalDir := filepath.Join(home, ".config", "tgc")
+	if err := os.MkdirAll(globalDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "config.toml"),
+		[]byte("api_id = 555\napi_hash = \"gh\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	id, hash := GlobalCredentials()
+	if id != 555 || hash != "gh" {
+		t.Fatalf("want global creds 555/gh, got %d/%s", id, hash)
+	}
+
+	// env wins.
+	t.Setenv("TGC_API_ID", "1")
+	t.Setenv("TGC_API_HASH", "env")
+	id, hash = GlobalCredentials()
+	if id != 1 || hash != "env" {
+		t.Fatalf("env should win: got %d/%s", id, hash)
 	}
 }
 

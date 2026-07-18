@@ -65,16 +65,73 @@ func Load() (*Config, error) {
 	return &c, nil
 }
 
+// Save writes the config atomically: write to a temp file in the same
+// directory, then rename over the target. This prevents a concurrent reader
+// (e.g. another agent on a shared workspace/.tgc) from observing a torn file.
 func Save(c *Config) error {
-	if err := os.MkdirAll(Dir(), 0o700); err != nil {
+	dir := Dir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(configPath(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	tmp, err := os.CreateTemp(dir, "config-*.toml.tmp")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(c)
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op after a successful rename
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := toml.NewEncoder(tmp).Encode(c); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, configPath())
+}
+
+// GlobalCredentials returns api_id/api_hash for seeding a new local config:
+// env TGC_API_ID/TGC_API_HASH first, else the GLOBAL config
+// ($XDG_CONFIG_HOME/tgc → ~/.config/tgc), deliberately ignoring any local
+// .tgc and TGC_CONFIG_DIR. Returns (0,"") when none are set.
+func GlobalCredentials() (int, string) {
+	// env first
+	id := 0
+	hash := ""
+	if v := os.Getenv("TGC_API_ID"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			id = n
+		}
+	}
+	if v := os.Getenv("TGC_API_HASH"); v != "" {
+		hash = v
+	}
+	if id != 0 && hash != "" {
+		return id, hash
+	}
+	// global config path (bypass Dir()'s local walk-up)
+	var globalDir string
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		globalDir = filepath.Join(x, "tgc")
+	} else {
+		home, _ := os.UserHomeDir()
+		globalDir = filepath.Join(home, ".config", "tgc")
+	}
+	var gc Config
+	if b, err := os.ReadFile(filepath.Join(globalDir, "config.toml")); err == nil {
+		if err := toml.Unmarshal(b, &gc); err == nil {
+			if id == 0 {
+				id = gc.APIID
+			}
+			if hash == "" {
+				hash = gc.APIHash
+			}
+		}
+	}
+	return id, hash
 }
 
 // ResolveProfile picks a profile: explicit name, then config default_profile,
