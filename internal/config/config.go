@@ -143,3 +143,46 @@ func APICredentials(c *Config) (int, string, error) {
 	}
 	return id, hash, nil
 }
+
+// homeDir returns the user's home directory, or "" if it cannot be determined
+// (e.g. HOME unset in a container). Callers treat "" as "no home boundary".
+func homeDir() string {
+	h, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
+// findLocalDir walks up from the current working directory looking for a
+// directory that contains a ".tgc" subdirectory. The nearest match wins. The
+// climb stops after inspecting $HOME (when known) or the filesystem root. It is
+// NOT bounded by git-root: a shared workspace/.tgc must be reachable from a
+// subproject that has its own .git. Returns "" when no local .tgc exists.
+func findLocalDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return findLocalDirFrom(wd)
+}
+
+func findLocalDirFrom(start string) string {
+	home := homeDir()
+	dir := start
+	for {
+		candidate := filepath.Join(dir, ".tgc")
+		if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
+			return candidate
+		}
+		// stat error (missing/permission) => keep climbing, never fatal.
+		if home != "" && dir == home {
+			return "" // inspected $HOME inclusively; stop.
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "" // reached FS root.
+		}
+		dir = parent
+	}
+}

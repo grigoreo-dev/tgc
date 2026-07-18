@@ -126,3 +126,49 @@ func TestAPICredentialsMissing(t *testing.T) {
 		t.Fatal("want error when no credentials anywhere")
 	}
 }
+
+func TestFindLocalDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// layout: home/ws/.tgc  and home/ws/projectA/.git (no .tgc)
+	ws := filepath.Join(home, "ws")
+	projA := filepath.Join(ws, "projectA")
+	if err := os.MkdirAll(filepath.Join(ws, ".tgc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(projA, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// From projectA (which has .git but no .tgc): climb PAST .git to ws/.tgc.
+	got := findLocalDirFrom(projA)
+	if got != filepath.Join(ws, ".tgc") {
+		t.Fatalf("climb-past-git: want %s, got %q", filepath.Join(ws, ".tgc"), got)
+	}
+
+	// Nearest wins: give projectA its own .tgc.
+	if err := os.MkdirAll(filepath.Join(projA, ".tgc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got = findLocalDirFrom(projA)
+	if got != filepath.Join(projA, ".tgc") {
+		t.Fatalf("nearest wins: want %s, got %q", filepath.Join(projA, ".tgc"), got)
+	}
+}
+
+func TestFindLocalDirIgnoresFileAndMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sub := filepath.Join(home, "a", "b")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A .tgc that is a *file* must be ignored.
+	if err := os.WriteFile(filepath.Join(sub, ".tgc"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := findLocalDirFrom(sub); got != "" {
+		t.Fatalf(".tgc-as-file must be ignored, got %q", got)
+	}
+}
