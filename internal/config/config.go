@@ -94,6 +94,18 @@ func Save(c *Config) error {
 	return os.Rename(tmpName, configPath())
 }
 
+// GlobalDir returns the machine-global config root ($XDG_CONFIG_HOME/tgc or
+// ~/.config/tgc). It deliberately ignores TGC_CONFIG_DIR and any local ./.tgc
+// walk-up — for state that must be shared across projects (e.g. update-check
+// cache).
+func GlobalDir() string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "tgc")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "tgc")
+}
+
 // GlobalCredentials returns api_id/api_hash for seeding a new local config:
 // env TGC_API_ID/TGC_API_HASH first, else the GLOBAL config
 // ($XDG_CONFIG_HOME/tgc → ~/.config/tgc), deliberately ignoring any local
@@ -113,16 +125,8 @@ func GlobalCredentials() (int, string) {
 	if id != 0 && hash != "" {
 		return id, hash
 	}
-	// global config path (bypass Dir()'s local walk-up)
-	var globalDir string
-	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-		globalDir = filepath.Join(x, "tgc")
-	} else {
-		home, _ := os.UserHomeDir()
-		globalDir = filepath.Join(home, ".config", "tgc")
-	}
 	var gc Config
-	if b, err := os.ReadFile(filepath.Join(globalDir, "config.toml")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(GlobalDir(), "config.toml")); err == nil {
 		if err := toml.Unmarshal(b, &gc); err == nil {
 			if id == 0 {
 				id = gc.APIID

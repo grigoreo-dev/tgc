@@ -14,11 +14,14 @@ type cacheFile struct {
 	Latest    string    `json:"latest"`
 }
 
-func cachePath() string { return filepath.Join(config.Dir(), "update-check.json") }
+// cachePath is the machine-global update-check cache. It must NOT use
+// config.Dir(): that prefers a local ./.tgc and would fragment the 24h
+// dedup across projects (tgc-1zm).
+func cachePath() string { return filepath.Join(config.GlobalDir(), "update-check.json") }
 
 // WriteCache atomically records the latest known release tag.
 func WriteCache(latest string) error {
-	dir := config.Dir()
+	dir := config.GlobalDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
