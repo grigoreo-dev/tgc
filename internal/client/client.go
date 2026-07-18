@@ -89,6 +89,17 @@ func isNotAuthenticated(err error) bool {
 	)
 }
 
+// notAuthenticatedMsg builds the not_authenticated message, naming the local
+// ./.tgc context when the active config came from a local dir.
+func notAuthenticatedMsg(profile, localDir string) string {
+	if localDir != "" {
+		return "profile " + profile + " in local " + localDir +
+			" has no valid session; run `tgc auth login` or `tgc auth import`"
+	}
+	return "profile " + profile +
+		" has no valid session; run `tgc auth login` or `tgc auth import`"
+}
+
 // Connect opens a connection using the existing profile session.
 // It never prompts: an invalid/absent session yields a structured
 // "not_authenticated" error.
@@ -113,8 +124,12 @@ func Connect(profileName string) (*Conn, error) {
 			return nil, err // already structured (config, flood_wait, ...)
 		}
 		if isNotAuthenticated(err) {
-			return nil, output.Errf("not_authenticated",
-				"profile %q has no valid session (%v); run `tgc auth login` or `tgc auth import`", p.Name, err)
+			dir, source := config.DirSource()
+			local := ""
+			if source == "local" {
+				local = dir
+			}
+			return nil, output.Errf("not_authenticated", "%s", notAuthenticatedMsg(p.Name, local))
 		}
 		return nil, err
 	}

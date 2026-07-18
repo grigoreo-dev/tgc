@@ -104,6 +104,15 @@ func TestResetSessionRemovesStringSession(t *testing.T) {
 	}
 }
 
+// notAuthenticatedMsg must name the local ./.tgc context when the active
+// config was resolved from a local dir.
+func TestNotAuthenticatedMentionsLocal(t *testing.T) {
+	msg := notAuthenticatedMsg("work", "/proj/.tgc")
+	if !strings.Contains(msg, "local") || !strings.Contains(msg, "/proj/.tgc") {
+		t.Fatalf("want local context in message, got %q", msg)
+	}
+}
+
 // resetSession on a profile with no session files must be a no-op, not an error.
 func TestResetSessionNoFilesIsNoop(t *testing.T) {
 	dir := t.TempDir()

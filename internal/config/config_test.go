@@ -269,6 +269,27 @@ func TestDirLocalBeatsGlobalButNotEnv(t *testing.T) {
 	}
 }
 
+func TestDirSelfHealsLocalGitignore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("TGC_CONFIG_DIR", "")
+	proj := filepath.Join(home, "proj")
+	local := filepath.Join(proj, ".tgc")
+	if err := os.MkdirAll(local, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chdir(t, proj)
+
+	if got := Dir(); got != local {
+		t.Fatalf("precondition: local not active, got %s", got)
+	}
+	// self-heal must have created .gitignore
+	if _, err := os.Stat(filepath.Join(local, ".gitignore")); err != nil {
+		t.Fatalf(".gitignore should be self-healed: %v", err)
+	}
+}
+
 func TestDirGlobalFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

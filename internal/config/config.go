@@ -39,6 +39,7 @@ func DirSource() (string, string) {
 		return d, "env"
 	}
 	if d := findLocalDir(); d != "" {
+		EnsureLocalGitignore(d)
 		return d, "local"
 	}
 	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
