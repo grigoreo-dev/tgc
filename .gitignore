@@ -13,3 +13,7 @@
 
 .internal/
 .codegraph/
+
+# Local agent / beads artifacts (not shared)
+.opencode/
+.beads/PRIME.md
