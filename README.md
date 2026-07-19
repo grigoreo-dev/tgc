@@ -248,12 +248,19 @@ A dev-only bot-side harness for exercising these paths lives at
 
 ## Rich messages
 
-By default, Markdown renders through Telegram message entities, which every
-account supports. A server-side rich-message path also exists, but user accounts
-reject it with `RICH_MESSAGE_UNSUPPORTED`, so tgc falls back to entities
-transparently — no custom PageBlock AST ships in v1. See
-[docs/rich-spike.md](docs/rich-spike.md) for the full investigation and the live
-result.
+**Sending.** By default, Markdown renders through Telegram message entities,
+which every account supports. A server-side rich-message path also exists, but
+user accounts reject it with `RICH_MESSAGE_UNSUPPORTED`, so tgc falls back to
+entities transparently. See [docs/rich-spike.md](docs/rich-spike.md) for the
+full investigation and the live result.
+
+**Reading.** Telegram Rich Messages (Bot API 10.1) put their body in a rich block
+tree (`tg.Message.RichMessage`) with an empty plain `text` field. `read`,
+`context`, and `await` render that block tree — headings, bold/italic/spoiler,
+code, lists, blockquotes, tables, math, and inline media references — into
+Markdown in the `text` field and add `"rich": true`. If the inline copy was
+truncated (or a full fetch was skipped/failed), `"rich_truncated": true` is also
+set. Untrusted text is Markdown-escaped so a sender cannot forge formatting.
 
 ## Contributing
 
