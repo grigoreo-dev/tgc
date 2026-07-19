@@ -4,15 +4,19 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/gotd/td/tg"
 
 	"github.com/grigoreo-dev/tgc/internal/client"
+	"github.com/grigoreo-dev/tgc/internal/config"
 	"github.com/grigoreo-dev/tgc/internal/markup"
 	"github.com/grigoreo-dev/tgc/internal/output"
 	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
+
+const richFetchBudget = 10
 
 // ParseDateArg parses a date argument in YYYY-MM-DD or RFC3339 form.
 func ParseDateArg(s string) (time.Time, error) {
@@ -77,7 +81,9 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 		if err != nil {
 			return nil, client.WrapErr(err)
 		}
-		return collectMessages(res, peer.ID, sinceT), nil
+		maps := collectMessages(res, peer.ID, sinceT)
+		autofetchRichParts(conn, ip, res, maps)
+		return maps, nil
 	default:
 		req := &tg.MessagesGetHistoryRequest{Peer: ip, Limit: o.Limit}
 		if o.BeforeID > 0 {
@@ -98,7 +104,9 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 		if err != nil {
 			return nil, client.WrapErr(err)
 		}
-		return collectMessages(res, peer.ID, sinceT), nil
+		maps := collectMessages(res, peer.ID, sinceT)
+		autofetchRichParts(conn, ip, res, maps)
+		return maps, nil
 	}
 }
 
@@ -121,7 +129,115 @@ func Context(conn *client.Conn, selector string, msgID, radius int) ([]map[strin
 	if err != nil {
 		return nil, client.WrapErr(err)
 	}
-	return collectMessages(res, peer.ID, time.Time{}), nil
+	maps := collectMessages(res, peer.ID, time.Time{})
+	autofetchRichParts(conn, ip, res, maps)
+	return maps, nil
+}
+
+// richPartIDs returns the ids of messages whose RichMessage is truncated (Part).
+func richPartIDs(res tg.MessagesMessagesClass) []int {
+	var msgs []tg.MessageClass
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		msgs = r.Messages
+	case *tg.MessagesMessagesSlice:
+		msgs = r.Messages
+	case *tg.MessagesChannelMessages:
+		msgs = r.Messages
+	default:
+		return nil
+	}
+	var ids []int
+	for _, mc := range msgs {
+		m, ok := mc.(*tg.Message)
+		if !ok {
+			continue
+		}
+		if rm, ok := m.GetRichMessage(); ok && rm.Part {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids
+}
+
+// autofetchRichParts re-renders truncated (Part) rich messages by fetching the
+// full version via messages.getRichMessage, bounded by richFetchBudget and a
+// stop-on-FLOOD_WAIT rule. It mutates maps in place (matched by "id").
+func autofetchRichParts(conn *client.Conn, ip tg.InputPeerClass, res tg.MessagesMessagesClass, maps []map[string]any) {
+	partIDs := richPartIDs(res)
+	if len(partIDs) == 0 {
+		return
+	}
+	byID := map[int]map[string]any{}
+	for _, mp := range maps {
+		if id, ok := mp["id"].(int); ok {
+			byID[id] = mp
+		}
+	}
+	spent := 0
+	stopped := false
+	for _, id := range partIDs {
+		mp := byID[id]
+		if mp == nil {
+			// since-filtered or otherwise absent from maps — do not spend budget
+			continue
+		}
+		if stopped || spent >= richFetchBudget {
+			mp["rich_truncated"] = true
+			continue
+		}
+		spent++
+		full, err := conn.Ctx.Raw.MessagesGetRichMessage(conn.Ctx, &tg.MessagesGetRichMessageRequest{Peer: ip, ID: id})
+		if err != nil {
+			mp["rich_truncated"] = true
+			output.Warnf("rich_fetch_failed", "id %d: %v", id, err)
+			if isFloodWait(err) {
+				stopped = true
+			}
+			continue
+		}
+		if rm := fullRichMessage(full, id); rm != nil {
+			md, truncated := markup.RenderRichMessage(*rm, nil)
+			if md != "" {
+				mp["text"] = md
+				mp["rich"] = true
+				if truncated {
+					mp["rich_truncated"] = true
+				} else {
+					delete(mp, "rich_truncated")
+				}
+			}
+		}
+	}
+}
+
+// fullRichMessage finds the message with id in a getRichMessage response and
+// returns its RichMessage.
+func fullRichMessage(res tg.MessagesMessagesClass, id int) *tg.RichMessage {
+	var msgs []tg.MessageClass
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		msgs = r.Messages
+	case *tg.MessagesMessagesSlice:
+		msgs = r.Messages
+	case *tg.MessagesChannelMessages:
+		msgs = r.Messages
+	default:
+		return nil
+	}
+	for _, mc := range msgs {
+		if m, ok := mc.(*tg.Message); ok && m.ID == id {
+			if rm, ok := m.GetRichMessage(); ok {
+				return &rm
+			}
+		}
+	}
+	return nil
+}
+
+// isFloodWait reports whether err is a Telegram FLOOD_WAIT.
+func isFloodWait(err error) bool {
+	return strings.Contains(strings.ToUpper(err.Error()), "FLOOD_WAIT")
 }
 
 // collectMessages extracts messages plus their attached users/chats from an
@@ -216,6 +332,29 @@ func messageToMap(m *tg.Message, users map[int64]*tg.User, chats map[int64]tg.Ch
 		}
 	}
 
+	// rich:true means text contains a rich render. Photos/Documents on RichMessage
+	// are a media reference pool for blocks, not standalone content — renderable
+	// rich content always has Blocks.
+	if rm, ok := m.GetRichMessage(); ok && !rm.Zero() && len(rm.Blocks) > 0 {
+		md, truncated := markup.RenderRichMessage(rm, richResolveMap(users))
+		if md != "" {
+			if m.Message == "" {
+				out["text"] = md
+			} else {
+				out["text"] = m.Message + "\n\n" + md
+			}
+			out["rich"] = true
+			// rm.Part means the inline copy is itself truncated (the full body
+			// needs a getRichMessage fetch). Flag it here so no-fetch paths
+			// (await live handler, global search) never silently emit a partial
+			// rich body; autofetchRichParts clears the flag on a successful
+			// full re-render.
+			if truncated || rm.Part {
+				out["rich_truncated"] = true
+			}
+		}
+	}
+
 	// grouped_id ties together the members of an album / media group. Emit it
 	// only when the message is actually grouped so ordinary messages stay
 	// uncluttered; callers reassemble albums via jq group_by(.grouped_id).
@@ -224,6 +363,23 @@ func messageToMap(m *tg.Message, users map[int64]*tg.User, chats map[int64]tg.Ch
 	}
 
 	return out
+}
+
+// richResolveMap builds a user_id -> display-name map for rich mention rendering
+// from the response-attached users (no extra resolves).
+func richResolveMap(users map[int64]*tg.User) map[int64]string {
+	if len(users) == 0 {
+		return nil
+	}
+	m := make(map[int64]string, len(users))
+	for id, u := range users {
+		if name := userName(u); name != "" {
+			m[id] = name
+		} else if u.Username != "" {
+			m[id] = "@" + u.Username
+		}
+	}
+	return m
 }
 
 func mediaToMap(media tg.MessageMediaClass) map[string]any {
@@ -375,6 +531,20 @@ func sentResult(upd tg.UpdatesClass, chatID int64) map[string]any {
 	return res
 }
 
+// useRichPath reports whether a send should attempt the rich_message path.
+//
+// It is used for the default (non-plain) path only, and bots must skip it:
+// sendMessage.rich_message (InputRichMessageMarkdown) is a user/Premium-only
+// feature. When a bot sends it, Telegram accepts the RPC WITHOUT error but
+// silently drops the payload, delivering an empty-text message. Routing bots to
+// the entities path instead carries their text correctly.
+func useRichPath(plain bool, p *config.Profile) bool {
+	if plain {
+		return false
+	}
+	return p == nil || p.Type != "bot"
+}
+
 // SendText sends a text message to selector, applying Markdown unless plain.
 func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]any, error) {
 	peer, err := resolve.Resolve(conn, selector)
@@ -420,7 +590,8 @@ func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]
 
 	// Path 2: default (non-plain) — attempt rich_message, then transparently
 	// fall back to the Task 6 entities path once if the user-layer rejects it.
-	if !o.Plain {
+	// Bots skip rich entirely (see useRichPath).
+	if useRichPath(o.Plain, conn.Profile) {
 		req := &tg.MessagesSendMessageRequest{
 			Peer:     ip,
 			Message:  body,

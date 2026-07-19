@@ -6,3 +6,4 @@
 | [ADR-0002](ADR-0002-thin-self-update.md) | Own thin self-update code instead of a third-party library | 2026-07-16 |
 | [ADR-0003](ADR-0003-local-tgc-walk-up-no-git-boundary.md) | Local `./.tgc` discovery walks up to `$HOME`, not bounded by git-root | 2026-07-18 |
 | [ADR-0004](ADR-0004-update-check-cache-global-dir.md) | Update-check cache lives in GlobalDir, not config.Dir() | 2026-07-18 |
+| [ADR-0005](ADR-0005-richmessage-markdown-read-projection.md) | Render incoming RichMessage to Markdown in the `text` field | 2026-07-19 |

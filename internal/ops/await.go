@@ -198,6 +198,13 @@ func drainUnread(conn *client.Conn, peer *resolve.Peer, target, fromID int64) ([
 		}
 		out = append(out, awaitEvent{ID: m.ID, Msg: messageToMap(m, users, chats, target)})
 	}
+	// The drain is synchronous (unlike the non-blocking live handler), so it may
+	// auto-fetch truncated Part rich bodies within the shared budget.
+	maps := make([]map[string]any, len(out))
+	for i := range out {
+		maps[i] = out[i].Msg
+	}
+	autofetchRichParts(conn, ip, res, maps)
 	return out, nil
 }
 

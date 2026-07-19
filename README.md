@@ -208,6 +208,11 @@ compact JSON object per line — the same shape as `read`:
 {"id":42,"chat_id":123,"date":"2026-07-19T12:00:00Z","text":"hi","sender_id":123, ...}
 ```
 
+Telegram **rich messages** (Bot API 10.1) carry their body in a rich block tree
+rather than plain text. `read`/`context`/`await` render that body to Markdown in
+the `text` field and add `"rich": true`; if the copy was truncated (or a full
+fetch was skipped/failed), `"rich_truncated": true` is also set.
+
 On silence until the timeout, `await` prints a marker and exits 0 (a normal
 outcome, not an error):
 
@@ -243,12 +248,19 @@ A dev-only bot-side harness for exercising these paths lives at
 
 ## Rich messages
 
-By default, Markdown renders through Telegram message entities, which every
-account supports. A server-side rich-message path also exists, but user accounts
-reject it with `RICH_MESSAGE_UNSUPPORTED`, so tgc falls back to entities
-transparently — no custom PageBlock AST ships in v1. See
-[docs/rich-spike.md](docs/rich-spike.md) for the full investigation and the live
-result.
+**Sending.** By default, Markdown renders through Telegram message entities,
+which every account supports. A server-side rich-message path also exists, but
+user accounts reject it with `RICH_MESSAGE_UNSUPPORTED`, so tgc falls back to
+entities transparently. See [docs/rich-spike.md](docs/rich-spike.md) for the
+full investigation and the live result.
+
+**Reading.** Telegram Rich Messages (Bot API 10.1) put their body in a rich block
+tree (`tg.Message.RichMessage`) with an empty plain `text` field. `read`,
+`context`, and `await` render that block tree — headings, bold/italic/spoiler,
+code, lists, blockquotes, tables, math, and inline media references — into
+Markdown in the `text` field and add `"rich": true`. If the inline copy was
+truncated (or a full fetch was skipped/failed), `"rich_truncated": true` is also
+set. Untrusted text is Markdown-escaped so a sender cannot forge formatting.
 
 ## Contributing
 
@@ -276,6 +288,12 @@ Keep changes focused, follow the existing package layout under `internal/`, and
 preserve the [output contract](#output-contract) — results as JSONL on stdout,
 structured errors on stderr. User-facing changes should update the README (and
 `README.ru.md`).
+
+**Live e2e suite.** `scripts/e2e/` holds a bidirectional live test suite that
+drives tgc against real test accounts (a user and a bot). It is not run by CI —
+it needs credentials and dedicated throwaway accounts. See
+[scripts/e2e/README.md](scripts/e2e/README.md) for preconditions and how to run
+`scripts/e2e/run-all.sh`.
 
 ### Issue tracking with beads (`bd`)
 
