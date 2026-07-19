@@ -217,7 +217,42 @@ func messageToMap(m *tg.Message, users map[int64]*tg.User, chats map[int64]tg.Ch
 		}
 	}
 
+	// rich:true means text contains a rich render. Photos/Documents on RichMessage
+	// are a media reference pool for blocks, not standalone content — renderable
+	// rich content always has Blocks.
+	if rm, ok := m.GetRichMessage(); ok && !rm.Zero() && len(rm.Blocks) > 0 {
+		md, truncated := markup.RenderRichMessage(rm, richResolveMap(users))
+		if md != "" {
+			if m.Message == "" {
+				out["text"] = md
+			} else {
+				out["text"] = m.Message + "\n\n" + md
+			}
+			out["rich"] = true
+			if truncated {
+				out["rich_truncated"] = true
+			}
+		}
+	}
+
 	return out
+}
+
+// richResolveMap builds a user_id -> display-name map for rich mention rendering
+// from the response-attached users (no extra resolves).
+func richResolveMap(users map[int64]*tg.User) map[int64]string {
+	if len(users) == 0 {
+		return nil
+	}
+	m := make(map[int64]string, len(users))
+	for id, u := range users {
+		if name := userName(u); name != "" {
+			m[id] = name
+		} else if u.Username != "" {
+			m[id] = "@" + u.Username
+		}
+	}
+	return m
 }
 
 func mediaToMap(media tg.MessageMediaClass) map[string]any {
