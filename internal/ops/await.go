@@ -9,6 +9,7 @@ import (
 	"github.com/gotd/td/tg"
 
 	"github.com/grigoreo-dev/tgc/internal/client"
+	"github.com/grigoreo-dev/tgc/internal/output"
 	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
 
@@ -23,7 +24,10 @@ func MarkRead(conn *client.Conn, selector string, maxID int) error {
 	if err != nil {
 		return err
 	}
-	if peer.Type == "channel" {
+	// Megagroups resolve as Type=="group" with AccessHash!=0 and, like channels,
+	// require channels.readHistory (messages.readHistory rejects them with
+	// PEER_ID_INVALID). Basic groups (AccessHash==0) stay on messages.readHistory.
+	if peer.Type == "channel" || (peer.Type == "group" && peer.AccessHash != 0) {
 		ch, err := resolve.InputChannel(peer)
 		if err != nil {
 			return err
@@ -52,7 +56,7 @@ func acceptMessage(m *tg.Message, target int64, fromID int64) bool {
 	if m == nil || m.Out {
 		return false
 	}
-	if peerID(m.PeerID) != target {
+	if resolve.TDLibPeerID(m.PeerID) != target {
 		return false
 	}
 	if fromID > 0 {
@@ -93,6 +97,12 @@ func Await(conn *client.Conn, selector string, o AwaitOpts) ([]map[string]any, i
 		if err != nil {
 			return nil, 0, 0, false, err
 		}
+		// acceptMessage's sender filter only engages when fromID>0. A non-user
+		// peer resolves to a negative TDLib id, which would silently disable the
+		// filter the user explicitly asked for — reject it instead.
+		if fp.Type != "user" {
+			return nil, 0, 0, false, output.Errf("bad_args", "--from must be a user selector")
+		}
 		fromID = fp.ID
 	}
 
@@ -126,36 +136,36 @@ func Await(conn *client.Conn, selector string, o AwaitOpts) ([]map[string]any, i
 	conn.Client.Dispatcher.AddHandler(handler)
 
 	// Startup drain (user profiles only). Bots have no standing unread window to
-	// replay, and messages.getPeerDialogs is a user-layer method.
+	// replay, and messages.getPeerDialogs is a user-layer method. The drained
+	// events are returned (NOT pushed through ev) and pre-seeded into
+	// collectBatch, so an unbounded standing-unread count can never overflow the
+	// bounded ev channel and be silently dropped (which would let MarkRead mark
+	// never-emitted messages read).
+	var preseed []awaitEvent
 	if conn.Profile == nil || conn.Profile.Type != "bot" {
-		if err := drainUnread(conn, peer, target, fromID, ev); err != nil {
+		preseed, err = drainUnread(conn, peer, target, fromID)
+		if err != nil {
 			return nil, 0, 0, false, err
 		}
 	}
 
 	deadline := time.After(o.Timeout)
-	batch, timedOut := collectBatch(ev, o.Debounce, deadline)
-
-	lastID := 0
-	for _, m := range batch {
-		if id, ok := m["id"].(int); ok && id > lastID {
-			lastID = id
-		}
-	}
+	batch, lastID, timedOut := collectBatch(ev, preseed, o.Debounce, deadline)
 	return batch, lastID, target, timedOut, nil
 }
 
-// drainUnread pre-seeds ev with the standing unread messages for a user peer.
-func drainUnread(conn *client.Conn, peer *resolve.Peer, target, fromID int64, ev chan<- awaitEvent) error {
+// drainUnread returns the standing unread messages for a user peer as await
+// events, oldest→newest, already filtered by acceptMessage.
+func drainUnread(conn *client.Conn, peer *resolve.Peer, target, fromID int64) ([]awaitEvent, error) {
 	ip, err := resolve.InputPeer(conn, peer)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pd, err := conn.Ctx.Raw.MessagesGetPeerDialogs(conn.Ctx, []tg.InputDialogPeerClass{
 		&tg.InputDialogPeer{Peer: ip},
 	})
 	if err != nil {
-		return client.WrapErr(err)
+		return nil, client.WrapErr(err)
 	}
 	var readMax, unread int
 	for _, d := range pd.Dialogs {
@@ -165,7 +175,7 @@ func drainUnread(conn *client.Conn, peer *resolve.Peer, target, fromID int64, ev
 		}
 	}
 	if unread <= 0 {
-		return nil // unread_count is only a gate; do not trust it as an exact limit
+		return nil, nil // unread_count is only a gate; do not trust it as an exact limit
 	}
 	// Fixed ceiling, NOT min(unread,100): unread_count may under-count (service
 	// events, reactions), and MinID already excludes everything <= readMax, so a
@@ -174,9 +184,10 @@ func drainUnread(conn *client.Conn, peer *resolve.Peer, target, fromID int64, ev
 		Peer: ip, MinID: readMax, Limit: 100,
 	})
 	if err != nil {
-		return client.WrapErr(err)
+		return nil, client.WrapErr(err)
 	}
 	msgs, users, chats := historyMessages(res) // ascending + user/chat index
+	out := make([]awaitEvent, 0, len(msgs))
 	for _, mc := range msgs {
 		m, ok := mc.(*tg.Message)
 		if !ok || m.ID <= readMax {
@@ -185,12 +196,9 @@ func drainUnread(conn *client.Conn, peer *resolve.Peer, target, fromID int64, ev
 		if !acceptMessage(m, target, fromID) {
 			continue
 		}
-		select {
-		case ev <- awaitEvent{ID: m.ID, Msg: messageToMap(m, users, chats, target)}:
-		default:
-		}
+		out = append(out, awaitEvent{ID: m.ID, Msg: messageToMap(m, users, chats, target)})
 	}
-	return nil
+	return out, nil
 }
 
 // historyMessages extracts messages ascending (oldest first) plus the user/chat

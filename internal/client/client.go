@@ -100,10 +100,11 @@ func notAuthenticatedMsg(profile, localDir string) string {
 		" has no valid session; run `tgc auth login` or `tgc auth import`"
 }
 
-// Connect opens a connection using the existing profile session.
-// It never prompts: an invalid/absent session yields a structured
-// "not_authenticated" error.
-func Connect(profileName string) (*Conn, error) {
+// connect opens a connection using the existing profile session. noUpdates
+// selects whether the gotgproto dispatcher delivers incoming updates (false =
+// live handlers fire). It never prompts: an invalid/absent session yields a
+// structured "not_authenticated" error. Shared by Connect/ConnectWatch.
+func connect(profileName string, noUpdates bool) (*Conn, error) {
 	p, err := config.ResolveProfile(profileName)
 	if err != nil {
 		return nil, err
@@ -113,7 +114,7 @@ func Connect(profileName string) (*Conn, error) {
 	// the resulting error is mapped to not_authenticated below.
 	conn, err := build(p, p.Type == "bot", "", &gotgproto.ClientOpts{
 		Session:          sessionFor(p),
-		NoUpdates:        true,
+		NoUpdates:        noUpdates,
 		NoAutoAuth:       true,
 		DisableCopyright: true,
 		Middlewares:      middlewares(),
@@ -136,38 +137,19 @@ func Connect(profileName string) (*Conn, error) {
 	return conn, nil
 }
 
+// Connect opens a connection using the existing profile session.
+// It never prompts: an invalid/absent session yields a structured
+// "not_authenticated" error.
+func Connect(profileName string) (*Conn, error) {
+	return connect(profileName, true)
+}
+
 // ConnectWatch is like Connect but enables updates (NoUpdates:false) so the
 // gotgproto dispatcher delivers incoming messages to registered handlers. The
 // caller MUST defer conn.Close(). It never prompts: an invalid/absent session
 // yields a structured "not_authenticated" error.
 func ConnectWatch(profileName string) (*Conn, error) {
-	p, err := config.ResolveProfile(profileName)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := build(p, p.Type == "bot", "", &gotgproto.ClientOpts{
-		Session:          sessionFor(p),
-		NoUpdates:        false,
-		NoAutoAuth:       true,
-		DisableCopyright: true,
-		Middlewares:      middlewares(),
-	})
-	if err != nil {
-		var oe *output.Error
-		if output.AsError(err, &oe) {
-			return nil, err
-		}
-		if isNotAuthenticated(err) {
-			dir, source := config.DirSource()
-			local := ""
-			if source == "local" {
-				local = dir
-			}
-			return nil, output.Errf("not_authenticated", "%s", notAuthenticatedMsg(p.Name, local))
-		}
-		return nil, err
-	}
-	return conn, nil
+	return connect(profileName, false)
 }
 
 // isAuthRestart reports whether err is Telegram's AUTH_RESTART, the protocol

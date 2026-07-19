@@ -142,6 +142,22 @@ func InputChannel(p *Peer) (tg.InputChannelClass, error) {
 // PlainChatID exposes the legacy basic-group id (positive) for a group peer.
 func PlainChatID(id int64) int64 { return plainChatID(id) }
 
+// TDLibPeerID converts a wire tg.Peer to the TDLib-form id used by Peer.ID
+// (users positive; basic groups -plainID; channels/supergroups
+// -(10^12+plainID)). This lets callers compare a wire peer against a
+// resolve.Resolve result, which is always in TDLib form.
+func TDLibPeerID(p tg.PeerClass) int64 {
+	switch v := p.(type) {
+	case *tg.PeerUser:
+		return v.UserID
+	case *tg.PeerChat:
+		return chatTDLibID(v.ChatID)
+	case *tg.PeerChannel:
+		return channelTDLibID(v.ChannelID)
+	}
+	return 0
+}
+
 // InputPeer builds a Telegram InputPeer for the resolved peer.
 func InputPeer(conn *client.Conn, p *Peer) (tg.InputPeerClass, error) {
 	if p == nil {

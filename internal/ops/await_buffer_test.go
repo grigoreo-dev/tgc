@@ -20,19 +20,22 @@ func TestCollectBatchCoalescesBurst(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		send(ev, 3, "c")
 	}()
-	batch, timedOut := collectBatch(ev, 100*time.Millisecond, deadline)
+	batch, lastID, timedOut := collectBatch(ev, nil, 100*time.Millisecond, deadline)
 	if timedOut {
 		t.Fatal("did not expect timeout")
 	}
 	if len(batch) != 3 {
 		t.Fatalf("want 3 messages, got %d", len(batch))
 	}
+	if lastID != 3 {
+		t.Fatalf("want lastID 3, got %d", lastID)
+	}
 }
 
 func TestCollectBatchTimeoutEmpty(t *testing.T) {
 	ev := make(chan awaitEvent)
 	deadline := time.After(50 * time.Millisecond)
-	batch, timedOut := collectBatch(ev, time.Second, deadline)
+	batch, _, timedOut := collectBatch(ev, nil, time.Second, deadline)
 	if !timedOut || batch != nil {
 		t.Fatalf("want (nil,true), got (%v,%v)", batch, timedOut)
 	}
@@ -42,7 +45,7 @@ func TestCollectBatchDeadlineFlushesNonEmpty(t *testing.T) {
 	ev := make(chan awaitEvent, 4)
 	deadline := time.After(60 * time.Millisecond)
 	go func() { send(ev, 1, "late") }() // arrives, then deadline fires during debounce
-	batch, timedOut := collectBatch(ev, 500*time.Millisecond, deadline)
+	batch, _, timedOut := collectBatch(ev, nil, 500*time.Millisecond, deadline)
 	if timedOut {
 		t.Fatal("non-empty buffer must flush, not timeout")
 	}
@@ -59,7 +62,7 @@ func TestCollectBatchDedup(t *testing.T) {
 		send(ev, 7, "x-dup")
 		send(ev, 8, "y")
 	}()
-	batch, _ := collectBatch(ev, 80*time.Millisecond, deadline)
+	batch, _, _ := collectBatch(ev, nil, 80*time.Millisecond, deadline)
 	if len(batch) != 2 {
 		t.Fatalf("want 2 after dedup, got %d", len(batch))
 	}
@@ -70,8 +73,35 @@ func TestCollectBatchNoDebounce(t *testing.T) {
 	ev := make(chan awaitEvent, 4)
 	deadline := time.After(5 * time.Second)
 	send(ev, 1, "immediate")
-	batch, timedOut := collectBatch(ev, 0, deadline)
+	batch, _, timedOut := collectBatch(ev, nil, 0, deadline)
 	if timedOut || len(batch) != 1 {
 		t.Fatalf("debounce=0: want 1 msg no timeout, got %d timedOut=%v", len(batch), timedOut)
+	}
+}
+
+func TestCollectBatchPreseedAndDedup(t *testing.T) {
+	// The startup drain is delivered via preseed (never through ev), so even a
+	// large drain cannot be dropped by a full channel. Live events dedup against
+	// preseeded ids, and lastID reflects the max across both.
+	ev := make(chan awaitEvent, 2)
+	deadline := time.After(5 * time.Second)
+	preseed := []awaitEvent{
+		{ID: 1, Msg: map[string]any{"id": 1}},
+		{ID: 2, Msg: map[string]any{"id": 2}},
+		{ID: 3, Msg: map[string]any{"id": 3}},
+	}
+	go func() {
+		send(ev, 3, "dup-of-preseed") // must be deduped
+		send(ev, 4, "live")
+	}()
+	batch, lastID, timedOut := collectBatch(ev, preseed, 80*time.Millisecond, deadline)
+	if timedOut {
+		t.Fatal("preseed present: must not time out")
+	}
+	if len(batch) != 4 {
+		t.Fatalf("want 4 (3 preseed + 1 new live, dup dropped), got %d", len(batch))
+	}
+	if lastID != 4 {
+		t.Fatalf("want lastID 4, got %d", lastID)
 	}
 }

@@ -43,6 +43,12 @@ var sendCmd = &cobra.Command{
 	Short: "Send a message (Markdown by default; --file for media)",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Flag validation before any MTProto connect: a flag error should not
+		// waste a dial.
+		if awaitReply && len(sendFiles) > 0 {
+			return output.Errf("bad_args", "--await-reply is not supported with --file")
+		}
+
 		connect := client.Connect
 		if awaitReply {
 			connect = client.ConnectWatch
@@ -54,9 +60,6 @@ var sendCmd = &cobra.Command{
 		defer conn.Close()
 
 		if len(sendFiles) > 0 {
-			if awaitReply {
-				return output.Errf("bad_args", "--await-reply is not supported with --file")
-			}
 			results, err := ops.SendFiles(conn, args[0], sendFiles, ops.FileOpts{
 				Caption: sendCaption, AsDocument: sendAsDocument, ReplyTo: sendReply, Plain: sendPlain,
 			})
