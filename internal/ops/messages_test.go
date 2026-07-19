@@ -79,3 +79,21 @@ func TestMessageToMapPhotoMedia(t *testing.T) {
 		t.Fatalf("media: %+v", media)
 	}
 }
+
+func TestMessageToMapGroupedID(t *testing.T) {
+	// An album member carries grouped_id; expose it so callers can
+	// reassemble albums (jq group_by(.grouped_id)).
+	grouped := &tg.Message{ID: 10}
+	grouped.SetGroupedID(123456789)
+	m := messageToMap(grouped, nil, nil, 5)
+	if m["grouped_id"] != int64(123456789) {
+		t.Fatalf("grouped_id: want 123456789, got %v (%+v)", m["grouped_id"], m)
+	}
+
+	// A non-grouped message must NOT emit the key at all (no clutter).
+	single := &tg.Message{ID: 11}
+	m2 := messageToMap(single, nil, nil, 5)
+	if _, present := m2["grouped_id"]; present {
+		t.Fatalf("grouped_id must be absent for non-grouped message: %+v", m2)
+	}
+}
