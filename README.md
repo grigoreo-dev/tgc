@@ -179,6 +179,11 @@ compact JSON object per line — the same shape as `read`:
 {"id":42,"chat_id":123,"date":"2026-07-19T12:00:00Z","text":"hi","sender_id":123, ...}
 ```
 
+Telegram **rich messages** (Bot API 10.1) carry their body in a rich block tree
+rather than plain text. `read`/`context`/`await` render that body to Markdown in
+the `text` field and add `"rich": true`; if the copy was truncated (or a full
+fetch was skipped/failed), `"rich_truncated": true` is also set.
+
 On silence until the timeout, `await` prints a marker and exits 0 (a normal
 outcome, not an error):
 
