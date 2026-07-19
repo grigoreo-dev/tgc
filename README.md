@@ -282,6 +282,12 @@ preserve the [output contract](#output-contract) — results as JSONL on stdout,
 structured errors on stderr. User-facing changes should update the README (and
 `README.ru.md`).
 
+**Live e2e suite.** `scripts/e2e/` holds a bidirectional live test suite that
+drives tgc against real test accounts (a user and a bot). It is not run by CI —
+it needs credentials and dedicated throwaway accounts. See
+[scripts/e2e/README.md](scripts/e2e/README.md) for preconditions and how to run
+`scripts/e2e/run-all.sh`.
+
 ### Issue tracking with beads (`bd`)
 
 This repo tracks work with [beads](https://github.com/gastownhall/beads) (`bd`),
