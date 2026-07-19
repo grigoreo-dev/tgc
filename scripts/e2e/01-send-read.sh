@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/e2e/01-send-read.sh — messaging commands, both directions.
 # user->bot: send / read --search / reply / info @bot / context / edit / forward
-# bot->user: send / read --search / info <user_id>
+# bot->user: send / read (bot_unsupported, dialog-based) / info <user_id>
 # Nonce-keyed assertions; cascade to `skip` (not `fail`) when a prerequisite send fails.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -58,8 +58,10 @@ BMID=$(jqf "$T" '.message_id')
 assert_exit "01: bot send exit" 0 "$ec"
 assert_nonempty "01: bot send message_id" "$BMID"
 if [ -n "${BMID:-}" ]; then
-  b read "$USR" --search "$Nb" --limit 5 > "$T" 2>&1
-  assert_json "01: bot read finds nonce" "$T" ".text" "$Nb"
+  # Bots cannot read/getHistory (dialog-based) — assert the clean structured error.
+  b read "$USR" --limit 3 > "$T" 2>&1; rc=$?
+  assert_error "01: bot read is bot_unsupported" "$T" bot_unsupported
+  assert_exit  "01: bot read exit 1" 1 "$rc"
   # bot resolves the human user — a real user, so type=="user" (the bot looking
   # at a person, not itself).
   b info "$USR" > "$T" 2>&1; assert_json "01: bot resolves user (type=user)" "$T" ".type" "user"
