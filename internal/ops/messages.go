@@ -216,6 +216,13 @@ func messageToMap(m *tg.Message, users map[int64]*tg.User, chats map[int64]tg.Ch
 		}
 	}
 
+	// grouped_id ties together the members of an album / media group. Emit it
+	// only when the message is actually grouped so ordinary messages stay
+	// uncluttered; callers reassemble albums via jq group_by(.grouped_id).
+	if gid, ok := m.GetGroupedID(); ok {
+		out["grouped_id"] = gid
+	}
+
 	return out
 }
 
