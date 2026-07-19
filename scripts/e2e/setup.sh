@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # scripts/e2e/setup.sh — prepare and validate the e2e user + bot profiles.
 set -uo pipefail
+set +x   # defense-in-depth: never let an operator-forced `bash -x` trace the token
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/e2e/lib.sh disable=SC1091
 . "$HERE/lib.sh"
@@ -9,7 +10,8 @@ die2() { printf 'SETUP ERROR: %s\n' "$1" >&2; exit 2; }
 
 command -v jq >/dev/null || die2 "jq not found"
 command -v "$TGC" >/dev/null 2>&1 || [ -x "$TGC" ] || die2 "tgc binary not found ($TGC)"
-[ -n "${TGC_BOT_TOKEN:-}" ] || die2 "TGC_BOT_TOKEN not set (from .env / env)"
+# length check (never substitutes the token value into a trace)
+[ "${#TGC_BOT_TOKEN:-0}" -gt 0 ] 2>/dev/null || die2 "TGC_BOT_TOKEN not set (from .env / env)"
 
 # Default-collision guard
 if [ "$USER_PROFILE" = "default" ] && [ "${E2E_ALLOW_DEFAULT:-}" != "1" ]; then
