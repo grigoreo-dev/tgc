@@ -1,12 +1,41 @@
-[Русская версия](README.ru.md)
+<div align="center">
+
+<img src="docs/assets/banner.png" alt="tgc — agent-first Telegram CLI" width="100%">
 
 # tgc
 
-An agent-first Telegram CLI written in Go, speaking MTProto through
-[gotgproto](https://github.com/celestix/gotgproto) and
-[gotd/td](https://github.com/gotd/td). It writes compact JSONL to stdout and
-structured JSON errors to stderr, so an agent can pipe and parse every result;
-pass `--pretty` when a human is reading.
+**An agent-first Telegram CLI, written in Go.**
+
+Speaks MTProto through [gotgproto](https://github.com/celestix/gotgproto) and
+[gotd/td](https://github.com/gotd/td) — writes compact JSONL to stdout and
+structured JSON errors to stderr, so an agent can pipe and parse every result.
+
+<p>
+  <a href="https://github.com/grigoreo-dev/tgc/releases"><img alt="Release" src="https://img.shields.io/github/v/release/grigoreo-dev/tgc?style=for-the-badge&logo=github&color=39ff14&labelColor=0d1117"></a>
+  <a href="https://go.dev"><img alt="Go" src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go&logoColor=white&labelColor=0d1117"></a>
+  <a href="https://core.telegram.org/mtproto"><img alt="MTProto" src="https://img.shields.io/badge/MTProto-229ED9?style=for-the-badge&logo=telegram&logoColor=white&labelColor=0d1117"></a>
+  <img alt="Output" src="https://img.shields.io/badge/output-JSONL-39ff14?style=for-the-badge&logo=json&logoColor=black&labelColor=0d1117">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/grigoreo-dev/tgc?style=for-the-badge&color=8b949e&labelColor=0d1117"></a>
+</p>
+
+<p>
+  <a href="https://github.com/grigoreo-dev/tgc/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/grigoreo-dev/tgc/ci.yml?style=flat-square&logo=githubactions&logoColor=white&label=CI&labelColor=0d1117&color=39ff14"></a>
+  <a href="https://goreportcard.com/report/github.com/grigoreo-dev/tgc"><img alt="Go Report" src="https://goreportcard.com/badge/github.com/grigoreo-dev/tgc?style=flat-square"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-8b949e?style=flat-square&labelColor=0d1117">
+  <img alt="Agent-first" src="https://img.shields.io/badge/agent--first-%E2%9C%93-22d3ee?style=flat-square&labelColor=0d1117">
+</p>
+
+[Русская версия](README.ru.md) · [Install](#install) · [Quick start](#quick-start) · [Commands](#commands) · [Docs](#documentation)
+
+</div>
+
+```console
+$ tgc send @user "**hi**" --await-reply
+{"id":42,"chat_id":123,"date":"2026-07-19T12:00:00Z","text":"hi","sender_id":123}
+{"id":43,"chat_id":123,"date":"2026-07-19T12:00:04Z","text":"hey!","sender_id":456}
+```
+
+Pass `--pretty` when a human is reading.
 
 ## Install
 
@@ -220,6 +249,56 @@ reject it with `RICH_MESSAGE_UNSUPPORTED`, so tgc falls back to entities
 transparently — no custom PageBlock AST ships in v1. See
 [docs/rich-spike.md](docs/rich-spike.md) for the full investigation and the live
 result.
+
+## Contributing
+
+Contributions are welcome. The workflow mirrors CI, so what passes locally passes
+in the pipeline.
+
+**Setup**
+
+```sh
+git clone https://github.com/grigoreo-dev/tgc
+cd tgc
+go build ./...
+```
+
+**Before you open a PR**, run the same checks CI does:
+
+```sh
+go build ./...
+go vet ./...
+go test ./...
+shellcheck install.sh   # if you touched the install script
+```
+
+Keep changes focused, follow the existing package layout under `internal/`, and
+preserve the [output contract](#output-contract) — results as JSONL on stdout,
+structured errors on stderr. User-facing changes should update the README (and
+`README.ru.md`).
+
+### Issue tracking with beads (`bd`)
+
+This repo tracks work with [beads](https://github.com/gastownhall/beads) (`bd`),
+a git-native, dependency-aware issue tracker. You don't need it to send a PR, but
+if you want to pick up existing work or coordinate a larger change:
+
+```sh
+bd ready                     # list unblocked, claimable work
+bd show <id>                 # read an issue and its dependencies
+bd update <id> --claim       # atomically take it (sets you as assignee)
+bd close <id> --reason "..." # mark it done
+```
+
+As an outside contributor, initialise beads in **contributor mode** so your
+planning issues route to a separate local repo and stay out of your PR:
+
+```sh
+bd init --contributor
+```
+
+Reference the bead id in your commit messages (e.g. `tgc-a1b2: fix flood-wait
+backoff`) so the change is traceable back to its issue.
 
 ## Documentation
 
