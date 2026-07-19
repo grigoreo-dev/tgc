@@ -145,3 +145,9 @@ func FailErr(err error) {
 func Fail(code, message string, extra map[string]any) {
 	FailErr(&Error{Code: code, Message: message, Extra: extra})
 }
+
+// Warnf writes a structured warning line to stderr (non-fatal).
+func Warnf(code, format string, a ...any) {
+	line, _ := json.Marshal(map[string]any{"warning": code, "message": fmt.Sprintf(format, a...)})
+	fmt.Fprintln(stderr, string(line))
+}

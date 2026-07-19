@@ -77,8 +77,9 @@ flags.
 | `members`  | List the members of a group. |
 | `search`   | Search chats and contacts; `--messages` for global message search. |
 | `read`     | Read chat history, newest first. |
+| `await`    | Block until incoming messages arrive, print them, mark them read. |
 | `context`  | Show a message with the messages surrounding it. |
-| `send`     | Send a message (Markdown by default; `--file` for media). |
+| `send`     | Send a message (Markdown by default; `--file` for media; `--await-reply` to wait for the reply). |
 | `edit`     | Edit a message you sent. |
 | `delete`   | Delete messages (for everyone by default; `--for-me` to keep for others). |
 | `forward`  | Forward a message to another chat. |
@@ -157,6 +158,59 @@ A bot account can't list dialogs or run a global chat search — both return
 `bot_unsupported`, because Telegram doesn't expose those to bots. A bot can send
 and read in chats it belongs to: address a user by `@username`, or by numeric
 user id for someone who has already messaged the bot.
+
+## Await incoming (agent conversations)
+
+When an agent needs the other side's reply rather than a snapshot of history,
+`tgc await` blocks until unread messages arrive, prints them, marks them read,
+and exits — the wait-for-reply primitive, no polling loop required.
+
+```sh
+tgc await @user                       # block until a message arrives
+tgc await @user --timeout 30          # give up after 30s
+tgc send @bot "ping" --await-reply    # send, then wait for the reply on one connection
+```
+
+`await` debounces: it waits for a quiet gap before returning, so a burst (or a
+media group) is coalesced into a single batch. Messages print oldest→newest, one
+compact JSON object per line — the same shape as `read`:
+
+```json
+{"id":42,"chat_id":123,"date":"2026-07-19T12:00:00Z","text":"hi","sender_id":123, ...}
+```
+
+On silence until the timeout, `await` prints a marker and exits 0 (a normal
+outcome, not an error):
+
+```json
+{"status":"timeout","chat_id":123,"waited":30}
+```
+
+| Flag | Command | Default | Effect |
+|------|---------|---------|--------|
+| `--timeout`   | `await` | `300` | Max seconds to wait before emitting the timeout marker. |
+| `--debounce`  | `await` | `2`   | Seconds of quiet before returning a batch (`0` = off). |
+| `--from`      | `await` | —     | Only messages from this sender (selector). |
+| `--await-reply`    | `send` | `false` | After sending, wait for the reply on the same connection. |
+| `--await-timeout`  | `send` | `300` | `--await-reply`: max seconds to wait. |
+| `--await-debounce` | `send` | `2`   | `--await-reply`: quiet seconds before returning a batch. |
+| `--await-from`     | `send` | —     | `--await-reply`: only messages from this sender. |
+
+> **Read-receipt side effect:** `await` marks the awaited messages read, which is
+> a **visible action to the contact** (they see your "read" state advance). This
+> is intentional — the messages are consumed — but it is not a silent peek.
+
+> **One await per profile:** a profile holds a single MTProto session, so you
+> cannot run two `await`s (or a `send --await-reply` alongside another `await`)
+> concurrently on the same profile. Parallel agents must use **separate
+> profiles** (`--profile` / `TGC_PROFILE`, or a per-project `./.tgc`).
+
+> Bots are **live-only**: no unread backfill and no mark-read, so a bot `await`
+> catches only messages that arrive while it is waiting. `--await-reply` is not
+> supported together with `--file`.
+
+A dev-only bot-side harness for exercising these paths lives at
+[scripts/await-e2e.sh](scripts/await-e2e.sh).
 
 ## Rich messages
 

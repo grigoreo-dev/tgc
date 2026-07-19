@@ -14,6 +14,16 @@ Run `tgc init` inside a project to give it an isolated default Telegram account
 is auto-gitignored (`*`). Use `tgc config path` to see which config is active
 (`source`: env | local | global) and whether an env var is shadowing a local one.
 
+## Waiting for a reply
+
+Instead of polling `read` in a loop, use `await` as the wait-for-reply
+primitive: `tgc send <chat> "..." --await-reply` (send, then wait on one
+connection) or `tgc await <chat>` (just wait). Both block until the reply
+arrives, print it as JSONL, mark it read, and exit. The default timeout is 300s;
+a timeout is a **normal outcome**, not an error — it prints
+`{"status":"timeout","chat_id":...,"waited":<sec>}` and exits 0. Only one await
+runs per profile at a time; parallel agents must use separate profiles.
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 > **Architecture in one line:** Issues live in a local Dolt database

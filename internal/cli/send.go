@@ -20,6 +20,11 @@ var (
 	sendAsDocument bool
 	editPlain      bool
 	deleteForMe    bool
+
+	awaitReply         bool
+	awaitReplyTimeout  int
+	awaitReplyDebounce int
+	awaitReplyFrom     string
 )
 
 func textArg(args []string, idx int) (string, error) {
@@ -38,7 +43,17 @@ var sendCmd = &cobra.Command{
 	Short: "Send a message (Markdown by default; --file for media)",
 	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		conn, err := client.Connect(ProfileName())
+		// Flag validation before any MTProto connect: a flag error should not
+		// waste a dial.
+		if awaitReply && len(sendFiles) > 0 {
+			return output.Errf("bad_args", "--await-reply is not supported with --file")
+		}
+
+		connect := client.Connect
+		if awaitReply {
+			connect = client.ConnectWatch
+		}
+		conn, err := connect(ProfileName())
 		if err != nil {
 			return err
 		}
@@ -69,6 +84,9 @@ var sendCmd = &cobra.Command{
 			return err
 		}
 		output.Emit(res)
+		if awaitReply {
+			return awaitOnConn(conn, args[0], awaitReplyTimeout, awaitReplyDebounce, awaitReplyFrom)
+		}
 		return nil
 	},
 }
@@ -153,6 +171,10 @@ func init() {
 	sendCmd.Flags().StringArrayVar(&sendFiles, "file", nil, "file to send (repeat for album, max 10)")
 	sendCmd.Flags().StringVar(&sendCaption, "caption", "", "caption for file/album")
 	sendCmd.Flags().BoolVar(&sendAsDocument, "as-document", false, "send image as document (default: photo for image/*)")
+	sendCmd.Flags().BoolVar(&awaitReply, "await-reply", false, "after sending, wait for the reply (see tgc await)")
+	sendCmd.Flags().IntVar(&awaitReplyTimeout, "await-timeout", 300, "await-reply: max seconds to wait")
+	sendCmd.Flags().IntVar(&awaitReplyDebounce, "await-debounce", 2, "await-reply: quiet seconds before returning a batch")
+	sendCmd.Flags().StringVar(&awaitReplyFrom, "await-from", "", "await-reply: only messages from this sender")
 	editCmd.Flags().BoolVar(&editPlain, "plain", false, "disable Markdown parsing")
 	deleteCmd.Flags().BoolVar(&deleteForMe, "for-me", false, "delete only for me")
 	rootCmd.AddCommand(sendCmd, editCmd, deleteCmd, forwardCmd)
