@@ -286,7 +286,14 @@ func renderPageBlock(b tg.PageBlockClass, c *richCtx) string {
 
 func renderListItem(it tg.PageListItemClass, c *richCtx) string {
 	if t, ok := it.(*tg.PageListItemText); ok {
-		return renderRichText(t.Text, c)
+		text := renderRichText(t.Text, c)
+		if t.Checkbox {
+			if t.Checked {
+				return "[x] " + text
+			}
+			return "[ ] " + text
+		}
+		return text
 	}
 	if b, ok := it.(*tg.PageListItemBlocks); ok {
 		var parts []string

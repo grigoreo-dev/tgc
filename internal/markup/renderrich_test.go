@@ -151,3 +151,56 @@ func TestRenderRichMessageSizeCap(t *testing.T) {
 		t.Fatalf("size cap not enforced: trunc=%v len=%d", trunc, len(md))
 	}
 }
+
+func TestRenderPageBlockListCheckbox(t *testing.T) {
+	c := &richCtx{truncated: new(bool)}
+	block := &tg.PageBlockList{
+		Items: []tg.PageListItemClass{
+			&tg.PageListItemText{Text: plain("Done"), Checkbox: true, Checked: true},
+			&tg.PageListItemText{Text: plain("Todo"), Checkbox: true, Checked: false},
+			&tg.PageListItemText{Text: plain("plain")},
+		},
+	}
+	got := renderPageBlock(block, c)
+	want := "- [x] Done\n- [ ] Todo\n- plain"
+	if got != want {
+		t.Fatalf("checkbox list:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+func TestRenderPageBlockDetailsKeepsTitle(t *testing.T) {
+	c := &richCtx{truncated: new(bool)}
+	block := &tg.PageBlockDetails{
+		Title: plain("More"),
+		Blocks: []tg.PageBlockClass{
+			&tg.PageBlockParagraph{Text: plain("nested body")},
+		},
+	}
+	got := renderPageBlock(block, c)
+	if !strings.Contains(got, "**More**") {
+		t.Fatalf("Details Title dropped; got %q", got)
+	}
+	if !strings.Contains(got, "nested body") {
+		t.Fatalf("Details nested block text missing; got %q", got)
+	}
+}
+
+func TestRenderPageBlockDepthCap(t *testing.T) {
+	// Nest PageBlockDetails deeper than maxRichDepth.
+	var b tg.PageBlockClass = &tg.PageBlockParagraph{Text: plain("leaf")}
+	for i := 0; i < maxRichDepth+5; i++ {
+		b = &tg.PageBlockDetails{
+			Title:  plain("L"),
+			Blocks: []tg.PageBlockClass{b},
+		}
+	}
+	trunc := new(bool)
+	c := &richCtx{truncated: trunc}
+	got := renderPageBlock(b, c)
+	if !*trunc {
+		t.Fatalf("expected truncated=true past block depth cap")
+	}
+	if !strings.Contains(got, "[…]") {
+		t.Fatalf("expected […] marker on depth cap, got %q", got)
+	}
+}
