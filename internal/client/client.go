@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -22,10 +23,22 @@ import (
 
 	"github.com/grigoreo-dev/tgc/internal/config"
 	"github.com/grigoreo-dev/tgc/internal/output"
+	"github.com/grigoreo-dev/tgc/internal/version"
 )
 
 // maxAutoFloodWait: FLOOD_WAIT up to this duration is retried transparently.
 const maxAutoFloodWait = 30 * time.Second
+
+// deviceConfig identifies tgc to Telegram. Without it, gotgproto reports its
+// own default ("GoTGProto"); this makes the client appear as "tgc" in
+// Telegram's Devices / active sessions list.
+func deviceConfig() *telegram.DeviceConfig {
+	return &telegram.DeviceConfig{
+		DeviceModel:   "tgc",
+		SystemVersion: runtime.GOOS,
+		AppVersion:    version.Version,
+	}
+}
 
 // Conn is an established Telegram connection bound to a tgc profile.
 type Conn struct {
@@ -117,6 +130,7 @@ func connect(profileName string, noUpdates bool) (*Conn, error) {
 		NoUpdates:        noUpdates,
 		NoAutoAuth:       true,
 		DisableCopyright: true,
+		Device:           deviceConfig(),
 		Middlewares:      middlewares(),
 	})
 	if err != nil {
@@ -199,6 +213,7 @@ func ConnectForLogin(profileName, phone, botToken string) (*Conn, error) {
 			Session:          sessionFor(p),
 			NoUpdates:        true,
 			DisableCopyright: true,
+			Device:           deviceConfig(),
 			Middlewares:      middlewares(),
 			AuthConversator:  newTerminalConversator(),
 		})
