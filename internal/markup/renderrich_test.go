@@ -1,6 +1,7 @@
 package markup
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -93,5 +94,60 @@ func TestRenderRichTextDepthCap(t *testing.T) {
 	_ = renderRichText(t0, c)
 	if !*trunc {
 		t.Fatalf("expected truncated=true past depth cap")
+	}
+}
+
+func h1(s string) tg.PageBlockClass { return &tg.PageBlockHeading1{Text: plain(s)} }
+
+func TestRenderPageBlocks(t *testing.T) {
+	c := &richCtx{truncated: new(bool)}
+	cases := []struct {
+		name string
+		in   tg.PageBlockClass
+		want string
+	}{
+		{"h1", &tg.PageBlockTitle{Text: plain("T")}, "# T"},
+		{"heading2", &tg.PageBlockHeading2{Text: plain("H")}, "## H"},
+		{"subheader", &tg.PageBlockSubheader{Text: plain("S")}, "**S**"},
+		{"paragraph", &tg.PageBlockParagraph{Text: plain("body")}, "body"},
+		{"divider", &tg.PageBlockDivider{}, "---"},
+		{"preformatted", &tg.PageBlockPreformatted{Text: plain("echo hi"), Language: "sh"}, "```sh\necho hi\n```"},
+		{"blockquote", &tg.PageBlockBlockquote{Text: plain("q")}, "> q"},
+		{"math", &tg.PageBlockMath{Source: "E=mc^2"}, "$$\nE=mc^2\n$$"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := renderPageBlock(tc.in, c); got != tc.want {
+				t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderPageBlockUnknownFallback(t *testing.T) {
+	c := &richCtx{truncated: new(bool)}
+	got := renderPageBlock(&tg.PageBlockUnsupported{}, c)
+	if got == "" || !strings.Contains(got, "block:") {
+		t.Fatalf("unknown block should degrade to placeholder, got %q", got)
+	}
+}
+
+func TestRenderRichMessageJoinAndSize(t *testing.T) {
+	rm := tg.RichMessage{Blocks: []tg.PageBlockClass{h1("A"), &tg.PageBlockParagraph{Text: plain("b")}}}
+	md, trunc := RenderRichMessage(rm, nil)
+	if md != "# A\n\nb" {
+		t.Fatalf("join: got %q", md)
+	}
+	if trunc {
+		t.Fatalf("small message should not be truncated")
+	}
+}
+
+func TestRenderRichMessageSizeCap(t *testing.T) {
+	big := strings.Repeat("x", maxRichBytes+100)
+	rm := tg.RichMessage{Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: plain(big)}}}
+	md, trunc := RenderRichMessage(rm, nil)
+	if !trunc || len(md) > maxRichBytes+8 {
+		t.Fatalf("size cap not enforced: trunc=%v len=%d", trunc, len(md))
 	}
 }

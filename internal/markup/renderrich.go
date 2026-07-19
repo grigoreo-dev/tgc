@@ -1,6 +1,7 @@
 package markup
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/gotd/td/tg"
@@ -147,4 +148,194 @@ func extractInnerRichText(t tg.RichTextClass, c *richCtx) string {
 		return renderRichText(ht.GetText(), c)
 	}
 	return ""
+}
+
+// tlTypeName returns a short constructor name for a TL object for fallbacks.
+func tlTypeName(v any) string {
+	s := strings.TrimPrefix(fmt.Sprintf("%T", v), "*tg.")
+	return s
+}
+
+// captionText renders a PageCaption's text (best-effort).
+func captionText(cap tg.PageCaption, c *richCtx) string {
+	return renderRichText(cap.Text, c)
+}
+
+func heading(level int, text tg.RichTextClass, c *richCtx) string {
+	if level < 1 {
+		level = 1
+	}
+	if level > 6 {
+		level = 6
+	}
+	return strings.Repeat("#", level) + " " + renderRichText(text, c)
+}
+
+func renderPageBlock(b tg.PageBlockClass, c *richCtx) string {
+	if b == nil {
+		return ""
+	}
+	if c.depth >= maxRichDepth {
+		*c.truncated = true
+		return "[…]"
+	}
+	c.depth++
+	defer func() { c.depth-- }()
+
+	switch v := b.(type) {
+	case *tg.PageBlockTitle:
+		return heading(1, v.Text, c)
+	case *tg.PageBlockHeading1:
+		return heading(1, v.Text, c)
+	case *tg.PageBlockSubtitle:
+		return heading(2, v.Text, c)
+	case *tg.PageBlockHeading2:
+		return heading(2, v.Text, c)
+	case *tg.PageBlockHeader:
+		return heading(3, v.Text, c)
+	case *tg.PageBlockHeading3:
+		return heading(3, v.Text, c)
+	case *tg.PageBlockHeading4:
+		return heading(4, v.Text, c)
+	case *tg.PageBlockHeading5:
+		return heading(5, v.Text, c)
+	case *tg.PageBlockHeading6:
+		return heading(6, v.Text, c)
+	case *tg.PageBlockSubheader:
+		return "**" + renderRichText(v.Text, c) + "**"
+	case *tg.PageBlockKicker:
+		return "**" + renderRichText(v.Text, c) + "**"
+	case *tg.PageBlockParagraph:
+		return renderRichText(v.Text, c)
+	case *tg.PageBlockPreformatted:
+		return "```" + v.Language + "\n" + renderRichText(v.Text, c) + "\n```"
+	case *tg.PageBlockBlockquote:
+		out := "> " + renderRichText(v.Text, c)
+		if cap := renderRichText(v.Caption, c); cap != "" {
+			out += "\n> — " + cap
+		}
+		return out
+	case *tg.PageBlockPullquote:
+		return "> " + renderRichText(v.Text, c)
+	case *tg.PageBlockBlockquoteBlocks:
+		var lines []string
+		for _, nb := range v.Blocks {
+			lines = append(lines, "> "+renderPageBlock(nb, c))
+		}
+		return strings.Join(lines, "\n")
+	case *tg.PageBlockDivider:
+		return "---"
+	case *tg.PageBlockMath:
+		return "$$\n" + v.Source + "\n$$"
+	case *tg.PageBlockList:
+		var lines []string
+		for _, it := range v.Items {
+			lines = append(lines, "- "+renderListItem(it, c))
+		}
+		return strings.Join(lines, "\n")
+	case *tg.PageBlockOrderedList:
+		var lines []string
+		for _, it := range v.Items {
+			lines = append(lines, renderOrderedItem(it, c))
+		}
+		return strings.Join(lines, "\n")
+	case *tg.PageBlockDetails:
+		out := "**" + renderRichText(v.Title, c) + "**"
+		for _, nb := range v.Blocks {
+			out += "\n> " + renderPageBlock(nb, c)
+		}
+		return out
+	case *tg.PageBlockPhoto:
+		return "![photo](" + captionText(v.Caption, c) + ")"
+	case *tg.PageBlockVideo:
+		return "[video: " + captionText(v.Caption, c) + "]"
+	case *tg.PageBlockAudio:
+		return "[audio: " + captionText(v.Caption, c) + "]"
+	case *tg.PageBlockCover:
+		return renderPageBlock(v.Cover, c)
+	case *tg.PageBlockCollage:
+		var lines []string
+		for _, it := range v.Items {
+			lines = append(lines, renderPageBlock(it, c))
+		}
+		return strings.Join(lines, "\n")
+	case *tg.PageBlockSlideshow:
+		var lines []string
+		for _, it := range v.Items {
+			lines = append(lines, renderPageBlock(it, c))
+		}
+		return strings.Join(lines, "\n")
+	case *tg.PageBlockFooter:
+		return "---\n" + renderRichText(v.Text, c)
+	case *tg.PageBlockAuthorDate:
+		return "_" + renderRichText(v.Author, c) + "_"
+	case *tg.PageBlockAnchor:
+		return "" // invisible anchor
+	default:
+		inner := ""
+		if ht, ok := b.(interface{ GetText() tg.RichTextClass }); ok {
+			inner = renderRichText(ht.GetText(), c)
+		}
+		out := "[block: " + tlTypeName(v) + "]"
+		if inner != "" {
+			out += " " + inner
+		}
+		return out
+	}
+}
+
+func renderListItem(it tg.PageListItemClass, c *richCtx) string {
+	if t, ok := it.(*tg.PageListItemText); ok {
+		return renderRichText(t.Text, c)
+	}
+	if b, ok := it.(*tg.PageListItemBlocks); ok {
+		var parts []string
+		for _, nb := range b.Blocks {
+			parts = append(parts, renderPageBlock(nb, c))
+		}
+		return strings.Join(parts, " ")
+	}
+	return ""
+}
+
+func renderOrderedItem(it tg.PageListOrderedItemClass, c *richCtx) string {
+	switch v := it.(type) {
+	case *tg.PageListOrderedItemText:
+		num := v.Num
+		if num == "" {
+			num = "1."
+		} else if !strings.HasSuffix(num, ".") {
+			num += "."
+		}
+		return num + " " + renderRichText(v.Text, c)
+	case *tg.PageListOrderedItemBlocks:
+		var parts []string
+		for _, nb := range v.Blocks {
+			parts = append(parts, renderPageBlock(nb, c))
+		}
+		return "1. " + strings.Join(parts, " ")
+	}
+	return ""
+}
+
+// RenderRichMessage renders a RichMessage block tree to Markdown. resolve is an
+// OPTIONAL user_id->display-name map (may be nil); no network is performed.
+// Returns truncated=true if any depth/size cap was hit.
+func RenderRichMessage(rm tg.RichMessage, resolve map[int64]string) (string, bool) {
+	trunc := false
+	c := &richCtx{resolve: resolve, truncated: &trunc}
+	var chunks []string
+	for _, b := range rm.Blocks {
+		s := renderPageBlock(b, c)
+		if s == "" {
+			continue
+		}
+		chunks = append(chunks, s)
+	}
+	md := strings.Join(chunks, "\n\n")
+	if len(md) > maxRichBytes {
+		md = md[:maxRichBytes] + "\n[…]"
+		trunc = true
+	}
+	return md, trunc
 }
