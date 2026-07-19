@@ -55,11 +55,13 @@ BOUT2=$(mktemp); await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BO
 sleep 3
 Nb=$(nonce 02b); u send "$BOT" "$Nb" >/dev/null
 wait "$BPID2" 2>/dev/null
-if grep -q "$Nb" "$BOUT2"; then pass "02: bot await catches user"; else
+# grep -F: the nonce contains "[e2e] ..." and the brackets are a regex character
+# class without -F, so a fixed-string match is mandatory here.
+if grep -qF "$Nb" "$BOUT2"; then pass "02: bot await catches user"; else
   # mandatory retry once with a fresh nonce
   await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BOUT2"; BPID3=$AWAIT_PID; sleep 3
   Nb2=$(nonce 02b-r); u send "$BOT" "$Nb2" >/dev/null; wait "$BPID3" 2>/dev/null
-  if grep -q "$Nb2" "$BOUT2"; then
+  if grep -qF "$Nb2" "$BOUT2"; then
     pass "02: bot await catches user (retry)"
   else
     fail "02: bot await catches user" "missed twice"
