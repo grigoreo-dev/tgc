@@ -15,7 +15,7 @@ BOT="@$E2E_BOT_USERNAME"; USR="$E2E_USER_ID"
 OUT=$(mktemp)
 
 # --- user await catches a 3-message burst from the bot ---
-PID=$(await_bg "$USER_PROFILE" "$BOT" "--timeout 20 --debounce 3" "$OUT")
+await_bg "$USER_PROFILE" "$BOT" "--timeout 20 --debounce 3" "$OUT"; PID=$AWAIT_PID
 sleep 3
 Na=$(nonce 02a); b send "$USR" "${Na}-1" >/dev/null; sleep 0.4
 b send "$USR" "${Na}-2" >/dev/null; sleep 0.4
@@ -36,7 +36,7 @@ assert_json "02: timeout marker" "$OUT" '.status' "timeout"
 assert_exit "02: timeout exit 0" 0 "$tec"
 
 # --- user send --await-reply round-trip (bot catches + replies) ---
-BOUT=$(mktemp); BPID=$(await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BOUT")
+BOUT=$(mktemp); await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BOUT"; BPID=$AWAIT_PID
 sleep 3
 Nr=$(nonce 02r)
 ( u send "$BOT" "$Nr ping" --await-reply --await-timeout 20 --await-debounce 2 > "$OUT" 2>&1 ) &
@@ -51,13 +51,13 @@ wait "$UPID" 2>/dev/null
 assert_json "02: await-reply got pong" "$OUT" 'select(.text != null) | select(.text|test("pong")) | .text' "$Nr pong"
 
 # --- bot await (live-only) catches a user message ---
-BOUT2=$(mktemp); BPID2=$(await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BOUT2")
+BOUT2=$(mktemp); await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BOUT2"; BPID2=$AWAIT_PID
 sleep 3
 Nb=$(nonce 02b); u send "$BOT" "$Nb" >/dev/null
 wait "$BPID2" 2>/dev/null
 if grep -q "$Nb" "$BOUT2"; then pass "02: bot await catches user"; else
   # mandatory retry once with a fresh nonce
-  BPID3=$(await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BOUT2"); sleep 3
+  await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BOUT2"; BPID3=$AWAIT_PID; sleep 3
   Nb2=$(nonce 02b-r); u send "$BOT" "$Nb2" >/dev/null; wait "$BPID3" 2>/dev/null
   if grep -q "$Nb2" "$BOUT2"; then
     pass "02: bot await catches user (retry)"

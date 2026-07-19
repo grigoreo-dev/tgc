@@ -53,7 +53,7 @@ printf 'e2e accounts:\n  user: %s (id %s)\n  bot:  @%s (id %s)\n' \
   "$USER_PROFILE" "$E2E_USER_ID" "$E2E_BOT_USERNAME" "$E2E_BOT_ID"
 
 # Warm-up round-trip (absorbs first-connect latency)
-WU="$(mktemp)"; PID=$(await_bg "$BOT_PROFILE" "$E2E_USER_ID" "--timeout 15 --debounce 1" "$WU")
+WU="$(mktemp)"; await_bg "$BOT_PROFILE" "$E2E_USER_ID" "--timeout 15 --debounce 1" "$WU"; PID=$AWAIT_PID
 sleep 3
 u send "@$E2E_BOT_USERNAME" "$(nonce warmup)" >/dev/null 2>&1 || true
 wait "$PID" 2>/dev/null || true

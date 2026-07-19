@@ -33,11 +33,15 @@ assert_exit() { if [ "$2" = "$3" ]; then pass "$1"; else fail "$1" "want exit $2
 assert_json() { local got; got=$(jqf "$2" "$3"); if [ "$got" = "$4" ]; then pass "$1"; else fail "$1" "filter $3 want [$4] got [$got]"; fi; }
 assert_error() { local got; got=$(jqf "$2" '.error'); if [ "$got" = "$3" ]; then pass "$1"; else fail "$1" "want error [$3] got [$got]"; fi; }
 
-await_bg() { # profile chat flags outfile  -> echoes PID
+# await_bg: start `tgc await` in the background writing to <outfile>.
+# Sets the global AWAIT_PID (do NOT call via $(...) — backgrounding inside a
+# command-substitution subshell leaves the outfile empty).
+await_bg() { # profile chat flags outfile   -> sets AWAIT_PID
   local prof="$1" chat="$2" flags="$3" out="$4"
   # shellcheck disable=SC2086
   "$TGC" --profile "$prof" await "$chat" $flags > "$out" 2>&1 &
-  echo $!
+  # shellcheck disable=SC2034  # AWAIT_PID is consumed by callers in other files
+  AWAIT_PID=$!
 }
 
 retry_recv() { # n cmd...  ; retries cmd until it produces stdout or n exhausted
