@@ -271,6 +271,23 @@ func renderPageBlock(b tg.PageBlockClass, c *richCtx) string {
 		return "_" + renderRichText(v.Author, c) + "_"
 	case *tg.PageBlockAnchor:
 		return "" // invisible anchor
+	case *tg.PageBlockTable:
+		var rows []string
+		for ri, row := range v.Rows {
+			var cells []string
+			for _, cell := range row.Cells {
+				cells = append(cells, renderRichText(cell.Text, c))
+			}
+			rows = append(rows, "| "+strings.Join(cells, " | ")+" |")
+			if ri == 0 {
+				sep := make([]string, len(row.Cells))
+				for i := range sep {
+					sep[i] = "---"
+				}
+				rows = append(rows, "| "+strings.Join(sep, " | ")+" |")
+			}
+		}
+		return strings.Join(rows, "\n")
 	default:
 		inner := ""
 		if ht, ok := b.(interface{ GetText() tg.RichTextClass }); ok {
