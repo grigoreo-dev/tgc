@@ -344,7 +344,12 @@ func messageToMap(m *tg.Message, users map[int64]*tg.User, chats map[int64]tg.Ch
 				out["text"] = m.Message + "\n\n" + md
 			}
 			out["rich"] = true
-			if truncated {
+			// rm.Part means the inline copy is itself truncated (the full body
+			// needs a getRichMessage fetch). Flag it here so no-fetch paths
+			// (await live handler, global search) never silently emit a partial
+			// rich body; autofetchRichParts clears the flag on a successful
+			// full re-render.
+			if truncated || rm.Part {
 				out["rich_truncated"] = true
 			}
 		}

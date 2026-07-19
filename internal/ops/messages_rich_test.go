@@ -47,6 +47,23 @@ func TestMessageToMapBothConcatenated(t *testing.T) {
 	}
 }
 
+// A Part=true rich message must be flagged rich_truncated even without a fetch,
+// so no-fetch paths (await live handler, global search) never silently emit a
+// partial rich body.
+func TestMessageToMapPartFlagsTruncated(t *testing.T) {
+	m := &tg.Message{ID: 1}
+	m.SetRichMessage(tg.RichMessage{Part: true, Blocks: []tg.PageBlockClass{
+		&tg.PageBlockParagraph{Text: &tg.TextPlain{Text: "partial"}},
+	}})
+	out := messageToMap(m, nil, nil, 5)
+	if out["rich"] != true {
+		t.Fatalf("rich flag not set on Part message")
+	}
+	if out["rich_truncated"] != true {
+		t.Fatalf("rich_truncated must be set for a Part=true message, got %v", out["rich_truncated"])
+	}
+}
+
 func TestRichPartIDs(t *testing.T) {
 	partMsg := &tg.Message{ID: 7}
 	partMsg.SetRichMessage(tg.RichMessage{Part: true, Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: &tg.TextPlain{Text: "x"}}}})
