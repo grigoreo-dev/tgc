@@ -46,3 +46,14 @@ func TestMessageToMapBothConcatenated(t *testing.T) {
 		t.Fatalf("rich flag not set on concat")
 	}
 }
+
+func TestRichPartIDs(t *testing.T) {
+	partMsg := &tg.Message{ID: 7}
+	partMsg.SetRichMessage(tg.RichMessage{Part: true, Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: &tg.TextPlain{Text: "x"}}}})
+	plainMsg := &tg.Message{ID: 8, Message: "hi"}
+	res := &tg.MessagesMessages{Messages: []tg.MessageClass{partMsg, plainMsg}}
+	got := richPartIDs(res)
+	if len(got) != 1 || got[0] != 7 {
+		t.Fatalf("richPartIDs = %v, want [7]", got)
+	}
+}

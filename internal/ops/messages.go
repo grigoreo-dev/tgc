@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -14,6 +15,8 @@ import (
 	"github.com/grigoreo-dev/tgc/internal/output"
 	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
+
+const richFetchBudget = 10
 
 // ParseDateArg parses a date argument in YYYY-MM-DD or RFC3339 form.
 func ParseDateArg(s string) (time.Time, error) {
@@ -78,7 +81,9 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 		if err != nil {
 			return nil, client.WrapErr(err)
 		}
-		return collectMessages(res, peer.ID, sinceT), nil
+		maps := collectMessages(res, peer.ID, sinceT)
+		autofetchRichParts(conn, ip, res, maps)
+		return maps, nil
 	default:
 		req := &tg.MessagesGetHistoryRequest{Peer: ip, Limit: o.Limit}
 		if o.BeforeID > 0 {
@@ -99,7 +104,9 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 		if err != nil {
 			return nil, client.WrapErr(err)
 		}
-		return collectMessages(res, peer.ID, sinceT), nil
+		maps := collectMessages(res, peer.ID, sinceT)
+		autofetchRichParts(conn, ip, res, maps)
+		return maps, nil
 	}
 }
 
@@ -122,7 +129,115 @@ func Context(conn *client.Conn, selector string, msgID, radius int) ([]map[strin
 	if err != nil {
 		return nil, client.WrapErr(err)
 	}
-	return collectMessages(res, peer.ID, time.Time{}), nil
+	maps := collectMessages(res, peer.ID, time.Time{})
+	autofetchRichParts(conn, ip, res, maps)
+	return maps, nil
+}
+
+// richPartIDs returns the ids of messages whose RichMessage is truncated (Part).
+func richPartIDs(res tg.MessagesMessagesClass) []int {
+	var msgs []tg.MessageClass
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		msgs = r.Messages
+	case *tg.MessagesMessagesSlice:
+		msgs = r.Messages
+	case *tg.MessagesChannelMessages:
+		msgs = r.Messages
+	default:
+		return nil
+	}
+	var ids []int
+	for _, mc := range msgs {
+		m, ok := mc.(*tg.Message)
+		if !ok {
+			continue
+		}
+		if rm, ok := m.GetRichMessage(); ok && rm.Part {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids
+}
+
+// autofetchRichParts re-renders truncated (Part) rich messages by fetching the
+// full version via messages.getRichMessage, bounded by richFetchBudget and a
+// stop-on-FLOOD_WAIT rule. It mutates maps in place (matched by "id").
+func autofetchRichParts(conn *client.Conn, ip tg.InputPeerClass, res tg.MessagesMessagesClass, maps []map[string]any) {
+	partIDs := richPartIDs(res)
+	if len(partIDs) == 0 {
+		return
+	}
+	byID := map[int]map[string]any{}
+	for _, mp := range maps {
+		if id, ok := mp["id"].(int); ok {
+			byID[id] = mp
+		}
+	}
+	spent := 0
+	stopped := false
+	for _, id := range partIDs {
+		mp := byID[id]
+		if mp == nil {
+			// since-filtered or otherwise absent from maps — do not spend budget
+			continue
+		}
+		if stopped || spent >= richFetchBudget {
+			mp["rich_truncated"] = true
+			continue
+		}
+		spent++
+		full, err := conn.Ctx.Raw.MessagesGetRichMessage(conn.Ctx, &tg.MessagesGetRichMessageRequest{Peer: ip, ID: id})
+		if err != nil {
+			mp["rich_truncated"] = true
+			output.Warnf("rich_fetch_failed", "id %d: %v", id, err)
+			if isFloodWait(err) {
+				stopped = true
+			}
+			continue
+		}
+		if rm := fullRichMessage(full, id); rm != nil {
+			md, truncated := markup.RenderRichMessage(*rm, nil)
+			if md != "" {
+				mp["text"] = md
+				mp["rich"] = true
+				if truncated {
+					mp["rich_truncated"] = true
+				} else {
+					delete(mp, "rich_truncated")
+				}
+			}
+		}
+	}
+}
+
+// fullRichMessage finds the message with id in a getRichMessage response and
+// returns its RichMessage.
+func fullRichMessage(res tg.MessagesMessagesClass, id int) *tg.RichMessage {
+	var msgs []tg.MessageClass
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		msgs = r.Messages
+	case *tg.MessagesMessagesSlice:
+		msgs = r.Messages
+	case *tg.MessagesChannelMessages:
+		msgs = r.Messages
+	default:
+		return nil
+	}
+	for _, mc := range msgs {
+		if m, ok := mc.(*tg.Message); ok && m.ID == id {
+			if rm, ok := m.GetRichMessage(); ok {
+				return &rm
+			}
+		}
+	}
+	return nil
+}
+
+// isFloodWait reports whether err is a Telegram FLOOD_WAIT.
+func isFloodWait(err error) bool {
+	return strings.Contains(strings.ToUpper(err.Error()), "FLOOD_WAIT")
 }
 
 // collectMessages extracts messages plus their attached users/chats from an
