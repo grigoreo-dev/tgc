@@ -5,7 +5,35 @@ import (
 	"time"
 
 	"github.com/gotd/td/tg"
+
+	"github.com/grigoreo-dev/tgc/internal/config"
 )
+
+func TestUseRichPath(t *testing.T) {
+	user := &config.Profile{Type: "user"}
+	bot := &config.Profile{Type: "bot"}
+
+	cases := []struct {
+		name  string
+		plain bool
+		p     *config.Profile
+		want  bool
+	}{
+		{"user default uses rich", false, user, true},
+		{"user plain skips rich", true, user, false},
+		{"bot default skips rich", false, bot, false}, // bots must never use rich
+		{"bot plain skips rich", true, bot, false},
+		{"nil profile default uses rich", false, nil, true},
+		{"nil profile plain skips rich", true, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := useRichPath(tc.plain, tc.p); got != tc.want {
+				t.Fatalf("useRichPath(plain=%v, %+v) = %v, want %v", tc.plain, tc.p, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestSentResultFromShortSentMessage(t *testing.T) {
 	date := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

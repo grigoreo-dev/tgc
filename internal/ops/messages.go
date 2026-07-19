@@ -9,6 +9,7 @@ import (
 	"github.com/gotd/td/tg"
 
 	"github.com/grigoreo-dev/tgc/internal/client"
+	"github.com/grigoreo-dev/tgc/internal/config"
 	"github.com/grigoreo-dev/tgc/internal/markup"
 	"github.com/grigoreo-dev/tgc/internal/output"
 	"github.com/grigoreo-dev/tgc/internal/resolve"
@@ -368,6 +369,20 @@ func sentResult(upd tg.UpdatesClass, chatID int64) map[string]any {
 	return res
 }
 
+// useRichPath reports whether a send should attempt the rich_message path.
+//
+// It is used for the default (non-plain) path only, and bots must skip it:
+// sendMessage.rich_message (InputRichMessageMarkdown) is a user/Premium-only
+// feature. When a bot sends it, Telegram accepts the RPC WITHOUT error but
+// silently drops the payload, delivering an empty-text message. Routing bots to
+// the entities path instead carries their text correctly.
+func useRichPath(plain bool, p *config.Profile) bool {
+	if plain {
+		return false
+	}
+	return p == nil || p.Type != "bot"
+}
+
 // SendText sends a text message to selector, applying Markdown unless plain.
 func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]any, error) {
 	peer, err := resolve.Resolve(conn, selector)
@@ -413,7 +428,8 @@ func SendText(conn *client.Conn, selector, text string, o SendOpts) (map[string]
 
 	// Path 2: default (non-plain) — attempt rich_message, then transparently
 	// fall back to the Task 6 entities path once if the user-layer rejects it.
-	if !o.Plain {
+	// Bots skip rich entirely (see useRichPath).
+	if useRichPath(o.Plain, conn.Profile) {
 		req := &tg.MessagesSendMessageRequest{
 			Peer:     ip,
 			Message:  body,
