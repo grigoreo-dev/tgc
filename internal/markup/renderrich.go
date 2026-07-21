@@ -3,6 +3,7 @@ package markup
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gotd/td/tg"
 )
@@ -358,7 +359,12 @@ func RenderRichMessage(rm tg.RichMessage, resolve map[int64]string) (string, boo
 	}
 	md := strings.Join(chunks, "\n\n")
 	if len(md) > maxRichBytes {
-		md = md[:maxRichBytes] + "\n[…]"
+		// Cut at or below the byte cap without splitting a UTF-8 rune.
+		n := maxRichBytes
+		for n > 0 && !utf8.RuneStart(md[n]) {
+			n--
+		}
+		md = md[:n] + "\n[…]"
 		trunc = true
 	}
 	return md, trunc
