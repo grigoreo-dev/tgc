@@ -71,6 +71,46 @@ func escapeLeadingBlockMeta(ln string) string {
 	return ln
 }
 
+// escapeLinkDest sanitizes a sender-controlled URL/email/phone value for use
+// inside a Markdown link destination: [label](DEST). Parentheses and backslashes
+// are escaped so they cannot close or restructure the destination; whitespace and
+// ASCII control characters are percent-encoded so they cannot inject line breaks
+// or terminate the destination early. Other characters are preserved so ordinary
+// URLs remain faithful.
+func escapeLinkDest(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\\' || c == '(' || c == ')':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c < 0x20:
+			fmt.Fprintf(&b, "%%%02X", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// escapeMathSource sanitizes a sender-controlled math expression for use inside
+// $...$ or $$...$$ fences. Only '$' is escaped so the fence cannot be closed
+// early; other characters (including LaTeX backslashes) are preserved.
+func escapeMathSource(s string) string {
+	return strings.ReplaceAll(s, "$", `\$`)
+}
+
+// escapeInlineMathSource is escapeMathSource plus newline→space so inline $...$
+// cannot span lines and forge block structure.
+func escapeInlineMathSource(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return escapeMathSource(s)
+}
+
 // renderRichText renders an inline RichText tree to Markdown.
 func renderRichText(t tg.RichTextClass, c *richCtx) string {
 	if t == nil {
@@ -107,11 +147,11 @@ func renderRichText(t tg.RichTextClass, c *richCtx) string {
 	case *tg.TextSuperscript:
 		return "<sup>" + renderRichText(v.Text, c) + "</sup>"
 	case *tg.TextURL:
-		return "[" + renderRichText(v.Text, c) + "](" + v.URL + ")"
+		return "[" + renderRichText(v.Text, c) + "](" + escapeLinkDest(v.URL) + ")"
 	case *tg.TextEmail:
-		return "[" + renderRichText(v.Text, c) + "](mailto:" + v.Email + ")"
+		return "[" + renderRichText(v.Text, c) + "](mailto:" + escapeLinkDest(v.Email) + ")"
 	case *tg.TextPhone:
-		return "[" + renderRichText(v.Text, c) + "](tel:" + v.Phone + ")"
+		return "[" + renderRichText(v.Text, c) + "](tel:" + escapeLinkDest(v.Phone) + ")"
 	case *tg.TextConcat:
 		var b strings.Builder
 		for _, ch := range v.Texts {
@@ -121,7 +161,7 @@ func renderRichText(t tg.RichTextClass, c *richCtx) string {
 	case *tg.TextAnchor:
 		return renderRichText(v.Text, c)
 	case *tg.TextMath:
-		return "$" + v.Source + "$"
+		return "$" + escapeInlineMathSource(v.Source) + "$"
 	case *tg.TextCustomEmoji:
 		return escapeMarkdown(v.Alt)
 	case *tg.TextMentionName:
@@ -226,7 +266,7 @@ func renderPageBlock(b tg.PageBlockClass, c *richCtx) string {
 	case *tg.PageBlockDivider:
 		return "---"
 	case *tg.PageBlockMath:
-		return "$$\n" + v.Source + "\n$$"
+		return "$$\n" + escapeMathSource(v.Source) + "\n$$"
 	case *tg.PageBlockList:
 		var lines []string
 		for _, it := range v.Items {

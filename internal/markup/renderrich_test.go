@@ -204,3 +204,181 @@ func TestRenderPageBlockDepthCap(t *testing.T) {
 		t.Fatalf("expected […] marker on depth cap, got %q", got)
 	}
 }
+
+// Security: sender-controlled URL/email/phone destinations and math sources are
+// untrusted. Delimiters in those fields must not break out of renderer-generated
+// Markdown structure. Formatting is defined only by the rich tree.
+func TestEscapeLinkDest(t *testing.T) {
+	// Destinations only need structural safety inside Markdown (...) destinations:
+	// escape '\', '(', ')', and percent-encode whitespace/control so they cannot
+	// terminate the destination or inject new lines. Other characters (including
+	// '*') remain literal inside the destination and do not break structure.
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"ordinary-https", "https://e.com/path?q=1", "https://e.com/path?q=1"},
+		{"ordinary-path", "/relative/path", "/relative/path"},
+		{"close-paren-breakout", "https://evil.com) **bold**", `https://evil.com\)%20**bold**`},
+		{"close-paren-simple", "https://evil.com)", `https://evil.com\)`},
+		{"space-breakout", "https://a.com b", "https://a.com%20b"},
+		{"newline-breakout", "https://a.com\n# forged", "https://a.com%0A#%20forged"},
+		{"backslash", `https://a.com\x`, `https://a.com\\x`},
+		{"open-paren", "https://a.com/foo(bar)", `https://a.com/foo\(bar\)`},
+		{"crlf", "https://a.com\r\n]", "https://a.com%0D%0A]"},
+		{"tab", "https://a.com\tx", "https://a.com%09x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := escapeLinkDest(tc.in); got != tc.want {
+				t.Fatalf("escapeLinkDest(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEscapeMathSource(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"ordinary", "E=mc^2", "E=mc^2"},
+		{"frac", `\frac{a}{b}`, `\frac{a}{b}`},
+		{"dollar-breakout", `x$ **bold**`, `x\$ **bold**`},
+		{"double-dollar-fence", "a\n$$\n# forged", "a\n\\$\\$\n# forged"},
+		{"inline-newlines-kept-for-block", "a\nb", "a\nb"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := escapeMathSource(tc.in); got != tc.want {
+				t.Fatalf("escapeMathSource(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderUntrustedTargetsNoBreakout(t *testing.T) {
+	c := &richCtx{truncated: new(bool)}
+	cases := []struct {
+		name string
+		in   tg.RichTextClass
+		// mustContain: structural fragments that must appear
+		// mustNotContain: breakout artifacts that must not appear as raw MD
+		want string
+	}{
+		{
+			name: "url-ordinary",
+			in:   &tg.TextURL{Text: plain("t"), URL: "https://e.com"},
+			want: `[t](https://e.com)`,
+		},
+		{
+			name: "url-paren-breakout",
+			in:   &tg.TextURL{Text: plain("click"), URL: "https://evil.com)[pwn](http://x"},
+			want: `[click](https://evil.com\)[pwn]\(http://x)`,
+		},
+		{
+			name: "url-whitespace-breakout",
+			in:   &tg.TextURL{Text: plain("t"), URL: "https://a.com) **inj**"},
+			want: `[t](https://a.com\)%20**inj**)`,
+		},
+		{
+			name: "url-newline-breakout",
+			in:   &tg.TextURL{Text: plain("t"), URL: "https://a.com\n[x](http://evil)"},
+			want: `[t](https://a.com%0A[x]\(http://evil\))`,
+		},
+		{
+			name: "email-ordinary",
+			in:   &tg.TextEmail{Text: plain("t"), Email: "a@b.c"},
+			want: `[t](mailto:a@b.c)`,
+		},
+		{
+			name: "email-breakout",
+			in:   &tg.TextEmail{Text: plain("t"), Email: "a@b.c) **x**"},
+			want: `[t](mailto:a@b.c\)%20**x**)`,
+		},
+		{
+			name: "phone-ordinary",
+			in:   &tg.TextPhone{Text: plain("t"), Phone: "+15551212"},
+			want: `[t](tel:+15551212)`,
+		},
+		{
+			name: "phone-breakout",
+			in:   &tg.TextPhone{Text: plain("t"), Phone: "+1) **x**"},
+			want: `[t](tel:+1\)%20**x**)`,
+		},
+		{
+			name: "math-ordinary",
+			in:   &tg.TextMath{Source: "E=mc^2"},
+			want: `$E=mc^2$`,
+		},
+		{
+			name: "math-dollar-breakout",
+			in:   &tg.TextMath{Source: "x$ **bold**"},
+			want: `$x\$ **bold**$`,
+		},
+		{
+			name: "math-newline-inline",
+			in:   &tg.TextMath{Source: "a\nb"},
+			// inline math collapses newlines so the $...$ span stays one line
+			want: `$a b$`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := renderRichText(tc.in, c); got != tc.want {
+				t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderUntrustedMathBlockNoBreakout(t *testing.T) {
+	c := &richCtx{truncated: new(bool)}
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"ordinary", "E=mc^2", "$$\nE=mc^2\n$$"},
+		{"fence-breakout", "x\n$$\n**forged**", "$$\nx\n\\$\\$\n**forged**\n$$"},
+		{"dollar-inline", "a$b", "$$\na\\$b\n$$"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderPageBlock(&tg.PageBlockMath{Source: tc.src}, c)
+			if got != tc.want {
+				t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// Integration: a full paragraph containing a malicious TextURL must not let the
+// destination inject a second link or bold formatting outside the link dest.
+func TestRenderRichMessageLinkDestInjectionInert(t *testing.T) {
+	rm := tg.RichMessage{
+		Blocks: []tg.PageBlockClass{
+			&tg.PageBlockParagraph{
+				Text: &tg.TextURL{
+					Text: plain("click"),
+					URL:  "https://evil.com) **injected** [x](http://pwn",
+				},
+			},
+		},
+	}
+	md, _ := RenderRichMessage(rm, nil)
+	// Destination must keep the payload inside a single (...) pair; the early
+	// ')' must be escaped so "**injected**" is not free Markdown after the link.
+	if strings.Contains(md, "](https://evil.com) **injected**") {
+		t.Fatalf("link dest breakout: malicious URL closed the destination early:\n%s", md)
+	}
+	if !strings.Contains(md, `https://evil.com\)`) {
+		t.Fatalf("expected escaped ')' in destination, got %q", md)
+	}
+	// Visible label still rendered (and escaped if needed).
+	if !strings.HasPrefix(md, "[click](") {
+		t.Fatalf("expected link label structure, got %q", md)
+	}
+}
