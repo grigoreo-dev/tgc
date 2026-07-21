@@ -3,6 +3,7 @@ package markup
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/gotd/td/tg"
 )
@@ -149,6 +150,44 @@ func TestRenderRichMessageSizeCap(t *testing.T) {
 	md, trunc := RenderRichMessage(rm, nil)
 	if !trunc || len(md) > maxRichBytes+8 {
 		t.Fatalf("size cap not enforced: trunc=%v len=%d", trunc, len(md))
+	}
+}
+
+// A multibyte rune straddling maxRichBytes must not be split: raw md[:maxRichBytes]
+// would leave an incomplete UTF-8 sequence.
+func TestRenderRichMessageSizeCapUTF8Boundary(t *testing.T) {
+	// "世" is 3 UTF-8 bytes; place it so the first byte sits at maxRichBytes-1.
+	const multi = "世"
+	if utf8.RuneLen([]rune(multi)[0]) != 3 {
+		t.Fatal("test fixture: expected 3-byte rune")
+	}
+	// Body length after render equals input for plain paragraph text.
+	// maxRichBytes-1 ASCII bytes + 3-byte rune + more => crosses cap mid-rune.
+	body := strings.Repeat("x", maxRichBytes-1) + multi + strings.Repeat("y", 50)
+	rm := tg.RichMessage{Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: plain(body)}}}
+	md, trunc := RenderRichMessage(rm, nil)
+	if !trunc {
+		t.Fatalf("expected truncated=true when multibyte content exceeds cap")
+	}
+	if !utf8.ValidString(md) {
+		t.Fatalf("truncated Markdown is not valid UTF-8 (len=%d)", len(md))
+	}
+	if !strings.HasSuffix(md, "\n[…]") {
+		t.Fatalf("expected […] marker, got suffix %q", md[len(md)-min(20, len(md)):])
+	}
+	prefix := strings.TrimSuffix(md, "\n[…]")
+	if len(prefix) > maxRichBytes {
+		t.Fatalf("capped prefix exceeds maxRichBytes: %d > %d", len(prefix), maxRichBytes)
+	}
+	// Cap must fall at a rune boundary: incomplete leading bytes of multi must be dropped.
+	if strings.Contains(prefix, multi) {
+		t.Fatalf("prefix must not include the straddling rune when cut would exceed cap: %q", prefix[len(prefix)-8:])
+	}
+	if len(prefix) != maxRichBytes-1 {
+		t.Fatalf("want prefix of %d ASCII bytes (cap before multibyte rune), got %d", maxRichBytes-1, len(prefix))
+	}
+	if !utf8.ValidString(prefix) {
+		t.Fatalf("capped prefix is not valid UTF-8")
 	}
 }
 
