@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,6 +173,27 @@ func TestPathContains(t *testing.T) {
 			t.Fatal("empty PATH should not contain anything")
 		}
 	})
+
+	// I3: empty PATH components from "::", leading ":", trailing ":" must be skipped.
+	t.Run("empty components", func(t *testing.T) {
+		e4 := Env{Path: "/a::/b:"}
+		if !e4.PathContains("/a") {
+			t.Fatal("expected hit for /a in /a::/b:")
+		}
+		if !e4.PathContains("/b") {
+			t.Fatal("expected hit for /b in /a::/b:")
+		}
+		if e4.PathContains("") {
+			t.Fatal("empty dir must not match empty PATH components")
+		}
+		e5 := Env{Path: ":/usr/bin:"}
+		if !e5.PathContains("/usr/bin") {
+			t.Fatal("expected hit with leading/trailing colons")
+		}
+		if e5.PathContains("/missing") {
+			t.Fatal("unexpected hit for /missing")
+		}
+	})
 }
 
 // Compile-time / interface smoke: Env fields exist as specified.
@@ -197,11 +217,14 @@ func TestUnsupportedShellErrorsDistinct(t *testing.T) {
 	if err1 == nil || err2 == nil {
 		t.Fatal("expected errors")
 	}
-	// Errors should mention the shell or be non-empty.
+	// Errors should be non-empty and identify the unsupported shell.
 	if strings.TrimSpace(err1.Error()) == "" {
 		t.Fatal("empty RcFile error")
 	}
-	if !errors.Is(err1, err1) { // sanity
-		t.Fatal("unreachable")
+	if !strings.Contains(err1.Error(), "nushell") {
+		t.Fatalf("RcFile error should mention shell, got %q", err1.Error())
+	}
+	if !strings.Contains(err2.Error(), "nushell") {
+		t.Fatalf("CompletionPath error should mention shell, got %q", err2.Error())
 	}
 }
