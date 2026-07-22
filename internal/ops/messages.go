@@ -136,19 +136,8 @@ func Context(conn *client.Conn, selector string, msgID, radius int) ([]map[strin
 
 // richPartIDs returns the ids of messages whose RichMessage is truncated (Part).
 func richPartIDs(res tg.MessagesMessagesClass) []int {
-	var msgs []tg.MessageClass
-	switch r := res.(type) {
-	case *tg.MessagesMessages:
-		msgs = r.Messages
-	case *tg.MessagesMessagesSlice:
-		msgs = r.Messages
-	case *tg.MessagesChannelMessages:
-		msgs = r.Messages
-	default:
-		return nil
-	}
 	var ids []int
-	for _, mc := range msgs {
+	for _, mc := range messagesFromResponse(res) {
 		m, ok := mc.(*tg.Message)
 		if !ok {
 			continue
@@ -163,6 +152,10 @@ func richPartIDs(res tg.MessagesMessagesClass) []int {
 // autofetchRichParts re-renders truncated (Part) rich messages by fetching the
 // full version via messages.getRichMessage, bounded by richFetchBudget and a
 // stop-on-FLOOD_WAIT rule. It mutates maps in place (matched by "id").
+//
+// On success, text is rebuilt with the same plain-prefix semantics as
+// messageToMap, and mentions resolve from the fetch response's users with
+// fallback to the original list response's users (never drop a known resolve).
 func autofetchRichParts(conn *client.Conn, ip tg.InputPeerClass, res tg.MessagesMessagesClass, maps []map[string]any) {
 	partIDs := richPartIDs(res)
 	if len(partIDs) == 0 {
@@ -174,6 +167,8 @@ func autofetchRichParts(conn *client.Conn, ip tg.InputPeerClass, res tg.Messages
 			byID[id] = mp
 		}
 	}
+	// Original list/history users for mention fallback when a fetch omits them.
+	origResolve := richResolveMap(messagesResponseUsers(res))
 	spent := 0
 	stopped := false
 	for _, id := range partIDs {
@@ -197,35 +192,112 @@ func autofetchRichParts(conn *client.Conn, ip tg.InputPeerClass, res tg.Messages
 			continue
 		}
 		if rm := fullRichMessage(full, id); rm != nil {
-			md, truncated := markup.RenderRichMessage(*rm, nil)
-			if md != "" {
-				mp["text"] = md
-				mp["rich"] = true
-				if truncated {
-					mp["rich_truncated"] = true
-				} else {
-					delete(mp, "rich_truncated")
-				}
+			// Prefer plain from the full message; fall back to the list response
+			// message (id-keyed, not positional — service/since gaps are safe).
+			plain := messagePlainByID(full, id)
+			if plain == "" {
+				plain = messagePlainByID(res, id)
 			}
+			resolve := mergeRichResolve(origResolve, richResolveMap(messagesResponseUsers(full)))
+			applyFetchedRichRender(mp, plain, *rm, resolve)
 		}
 	}
+}
+
+// composeRichMapText applies messageToMap ordinary-prefix semantics: if plain
+// is non-empty and rich Markdown is non-empty, join with "\n\n"; otherwise
+// return whichever side is present.
+func composeRichMapText(plain, richMD string) string {
+	switch {
+	case plain == "":
+		return richMD
+	case richMD == "":
+		return plain
+	default:
+		return plain + "\n\n" + richMD
+	}
+}
+
+// mergeRichResolve returns a mention resolve map where overlay entries win and
+// base fills gaps. Empty inputs yield nil (renderer treats nil as no resolve).
+func mergeRichResolve(base, overlay map[int64]string) map[int64]string {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+	out := make(map[int64]string, len(base)+len(overlay))
+	for id, name := range base {
+		out[id] = name
+	}
+	for id, name := range overlay {
+		out[id] = name
+	}
+	return out
+}
+
+// applyFetchedRichRender rewrites mp text/flags after a successful full
+// RichMessage fetch. No network; pure post-processing seam for tests.
+func applyFetchedRichRender(mp map[string]any, plain string, rm tg.RichMessage, resolve map[int64]string) {
+	if mp == nil {
+		return
+	}
+	md, truncated := markup.RenderRichMessage(rm, resolve)
+	if md == "" {
+		return
+	}
+	mp["text"] = composeRichMapText(plain, md)
+	mp["rich"] = true
+	if truncated {
+		mp["rich_truncated"] = true
+	} else {
+		delete(mp, "rich_truncated")
+	}
+}
+
+// messagesResponseUsers extracts the Users slice from a MessagesMessagesClass.
+func messagesResponseUsers(res tg.MessagesMessagesClass) map[int64]*tg.User {
+	var users []tg.UserClass
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		users = r.Users
+	case *tg.MessagesMessagesSlice:
+		users = r.Users
+	case *tg.MessagesChannelMessages:
+		users = r.Users
+	default:
+		return nil
+	}
+	return indexUsers(users)
+}
+
+// messagesFromResponse returns the Messages slice for a MessagesMessagesClass.
+func messagesFromResponse(res tg.MessagesMessagesClass) []tg.MessageClass {
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		return r.Messages
+	case *tg.MessagesMessagesSlice:
+		return r.Messages
+	case *tg.MessagesChannelMessages:
+		return r.Messages
+	default:
+		return nil
+	}
+}
+
+// messagePlainByID returns m.Message for the *tg.Message with the given id, or "".
+// Lookup is by message id, never by list position (service/since filters safe).
+func messagePlainByID(res tg.MessagesMessagesClass, id int) string {
+	for _, mc := range messagesFromResponse(res) {
+		if m, ok := mc.(*tg.Message); ok && m.ID == id {
+			return m.Message
+		}
+	}
+	return ""
 }
 
 // fullRichMessage finds the message with id in a getRichMessage response and
 // returns its RichMessage.
 func fullRichMessage(res tg.MessagesMessagesClass, id int) *tg.RichMessage {
-	var msgs []tg.MessageClass
-	switch r := res.(type) {
-	case *tg.MessagesMessages:
-		msgs = r.Messages
-	case *tg.MessagesMessagesSlice:
-		msgs = r.Messages
-	case *tg.MessagesChannelMessages:
-		msgs = r.Messages
-	default:
-		return nil
-	}
-	for _, mc := range msgs {
+	for _, mc := range messagesFromResponse(res) {
 		if m, ok := mc.(*tg.Message); ok && m.ID == id {
 			if rm, ok := m.GetRichMessage(); ok {
 				return &rm
