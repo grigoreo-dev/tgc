@@ -19,7 +19,8 @@ _run() { # $1=profile, rest=args
 u() { _run "$USER_PROFILE" "$@"; }
 b() { _run "$BOT_PROFILE" "$@"; }
 
-nonce() { NONCE="[e2e] $1 $RANDOM$RANDOM"; printf '%s' "$NONCE"; }
+# Markdown-neutral nonce: "e2e <tag> <random>" — no renderer-significant metacharacters.
+nonce() { NONCE="e2e $1 $RANDOM$RANDOM"; printf '%s' "$NONCE"; }
 
 jqf() { jq -r "$2" < "$1" 2>/dev/null | head -1; }
 
@@ -70,15 +71,48 @@ summary() {
   [ "$E2E_FAIL" -eq 0 ]
 }
 
-# --- at bottom of lib.sh, temporary RED harness ---
-if [ "${E2E_SELFTEST:-}" = "1" ]; then
-  assert_eq "eq-pass" "x" "x"
-  assert_eq "eq-fail" "x" "y"           # expect one ✗
-  n1=$(nonce demo); n2=$(nonce demo); assert_nonempty "nonce" "$n1"
-  if [ "$n1" != "$n2" ]; then pass "nonce-unique"; else fail "nonce-unique" "collision"; fi
-  echo '{"error":"bot_unsupported"}' > /tmp/e2e_st.json
-  assert_error "err" /tmp/e2e_st.json bot_unsupported
-  echo '{"status":"timeout","waited":5}' > /tmp/e2e_st2.json
-  assert_json "json" /tmp/e2e_st2.json '.waited' 5
-  summary
-fi
+# run_scenario <name> <script>
+# Captures output + exit status without set -e, prints output, parses one terminal
+# summary, and updates global TP/TF/TS fail-closed:
+#   valid summary + rc 0 + FAILED 0 -> add counters
+#   valid summary + rc nonzero      -> add counters, TF += max(parsed_failed, 1)
+#   missing/malformed summary       -> TF += 1 (regardless of rc)
+#   missing script                  -> TF += 1
+run_scenario() {
+  local name="$1" script="$2"
+  local out rc line p f k add_f
+  printf '===== %s =====\n' "$name"
+  if [ ! -f "$script" ]; then
+    printf 'scenario script missing: %s\n' "$script"
+    TF=$((TF + 1))
+    return 0
+  fi
+
+  set +e
+  out="$(bash "$script" 2>&1)"
+  rc=$?
+  set +e
+  printf '%s\n' "$out"
+
+  # Exactly one terminal summary line (last match wins if multiple).
+  line="$(printf '%s\n' "$out" | grep -E '^PASSED: [0-9]+, FAILED: [0-9]+, SKIPPED: [0-9]+$' | tail -1 || true)"
+  if [ -z "$line" ]; then
+    printf 'scenario %s: missing or malformed summary (rc=%s)\n' "$name" "$rc"
+    TF=$((TF + 1))
+    return 0
+  fi
+
+  p="$(printf '%s\n' "$line" | sed -n 's/^PASSED: \([0-9]*\), FAILED: \([0-9]*\), SKIPPED: \([0-9]*\)$/\1/p')"
+  f="$(printf '%s\n' "$line" | sed -n 's/^PASSED: \([0-9]*\), FAILED: \([0-9]*\), SKIPPED: \([0-9]*\)$/\2/p')"
+  k="$(printf '%s\n' "$line" | sed -n 's/^PASSED: \([0-9]*\), FAILED: \([0-9]*\), SKIPPED: \([0-9]*\)$/\3/p')"
+  p=${p:-0}; f=${f:-0}; k=${k:-0}
+
+  TP=$((TP + p))
+  TS=$((TS + k))
+  add_f=$f
+  if [ "$rc" -ne 0 ] && [ "$add_f" -lt 1 ]; then
+    add_f=1
+  fi
+  TF=$((TF + add_f))
+  return 0
+}

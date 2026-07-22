@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# scripts/e2e/07-rich.sh — bot sends a rich message, user reads it rendered as Markdown.
-# Proves the RichMessage->Markdown read projection: a message whose body lives in
-# rich_message (empty plain text) is no longer invisible to the user.
+# scripts/e2e/07-rich.sh — SMOKE TEST: bot sends a rich message; user reads Markdown.
+# Reduced live coverage (not a full golden): heading + bold + list + rich:true.
+# Proves RichMessage->Markdown read projection for the common path.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/e2e/lib.sh disable=SC1091
@@ -12,9 +12,7 @@ require_setup
 BOT="@$E2E_BOT_USERNAME"; USR="$E2E_USER_ID"
 OUT=$(mktemp)
 
-# Use a bare-digit tag for the grep (the nonce contains "[e2e]"; the renderer
-# correctly ESCAPES the brackets to \[e2e\] as a security measure, so we assert
-# on the un-escaped numeric tag rather than the bracketed nonce).
+# Alphanumeric tag only — fixed-string greps; independent of nonce() format.
 TAG="07rich$RANDOM$RANDOM"
 MD="# ${TAG}\n\n**bold line**\n\n- item one\n- item two"
 b send "$USR" "rich-fallback ${TAG}" --rich "{\"type\":\"markdown\",\"markdown\":\"${MD}\"}" >/dev/null

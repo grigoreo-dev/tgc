@@ -21,7 +21,7 @@ Na=$(nonce 02a); b send "$USR" "${Na}-1" >/dev/null; sleep 0.4
 b send "$USR" "${Na}-2" >/dev/null; sleep 0.4
 b send "$USR" "${Na}-3" >/dev/null
 wait "$PID" 2>/dev/null
-# Filter to OUR nonce only — a warm-up or other message must not skew the check.
+# Filter to OUR nonce only (fixed-string; nonces are Markdown-neutral "e2e <tag> <rand>").
 MINE=$(mktemp); grep -F "$Na" "$OUT" > "$MINE" || true
 LINES=$(grep -c '"id"' "$MINE" || true)
 assert_eq "02: user await burst count" 3 "$LINES"
@@ -55,8 +55,7 @@ BOUT2=$(mktemp); await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BO
 sleep 3
 Nb=$(nonce 02b); u send "$BOT" "$Nb" >/dev/null
 wait "$BPID2" 2>/dev/null
-# grep -F: the nonce contains "[e2e] ..." and the brackets are a regex character
-# class without -F, so a fixed-string match is mandatory here.
+# Fixed-string match on Markdown-neutral nonce (no metachar interpretation).
 if grep -qF "$Nb" "$BOUT2"; then pass "02: bot await catches user"; else
   # mandatory retry once with a fresh nonce
   await_bg "$BOT_PROFILE" "$USR" "--timeout 20 --debounce 1" "$BOUT2"; BPID3=$AWAIT_PID; sleep 3
