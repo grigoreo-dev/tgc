@@ -152,6 +152,14 @@ func Warnf(code, format string, a ...any) {
 	fmt.Fprintln(stderr, string(line))
 }
 
+// SwapStdout replaces the package stdout writer and returns a restore func.
+// Intended for tests that assert Emit output without touching real stdout.
+func SwapStdout(w io.Writer) (restore func()) {
+	prev := stdout
+	stdout = w
+	return func() { stdout = prev }
+}
+
 // SwapStderr replaces the package stderr writer and returns a restore func.
 // Intended for tests that assert structured warnings.
 func SwapStderr(w io.Writer) (restore func()) {
