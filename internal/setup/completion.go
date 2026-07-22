@@ -3,6 +3,7 @@ package setup
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,7 +19,43 @@ type Generator func(shell string, w io.Writer) error
 // supportedShells is the v1 set for RefreshMarked and shell validation.
 var supportedShells = []string{"bash", "zsh", "fish"}
 
+// defaultCreatePerm is used only when creating a file that did not exist.
+const defaultCreatePerm os.FileMode = 0o644
+
+// resolveWriteTarget returns the path to rename onto for an atomic write.
+// Existing symlinks resolve to their target so the symlink node is preserved
+// (dotfile managers). Absent path → path (create). Dangling symlink → error.
+func resolveWriteTarget(path string) (string, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, nil
+		}
+		return "", err
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %s: %w", path, err)
+	}
+	return resolved, nil
+}
+
+// filePermOr returns path's permission bits when it exists, otherwise def.
+// Stat follows symlinks so rewrites keep the target's mode.
+func filePermOr(path string, def os.FileMode) os.FileMode {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return def
+	}
+	return fi.Mode().Perm()
+}
+
 // atomicWriteFile writes data to path via temp file in the same directory + rename.
+// Callers pass a resolved write target and the final permission bits (preserve
+// existing Mode().Perm(); defaultCreatePerm only for create-from-absent).
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -55,8 +92,8 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 
 // writeCompletion generates completion for shell, prepends FileMarker, and
 // atomically writes to path when allowed by marker discipline:
-//   - absent → create
-//   - first line contains FileMarker → regenerate if bytes differ
+//   - absent → create (0644)
+//   - first line contains FileMarker → regenerate if bytes differ (preserve perms)
 //   - unmarked existing → skip (changed=false, skipped=true)
 //
 // Returns whether bytes changed and whether an unmarked file was skipped.
@@ -70,50 +107,62 @@ func writeCompletion(path, shell string, gen Generator) (changed, skipped bool, 
 		return false, false, output.Errf("io_error", "generate completion for %s: %v", shell, err)
 	}
 	data := append([]byte(FileMarker+"\n"), buf.Bytes()...)
-	return writeManagedIfAllowed(path, data, 0o644)
+	return writeManagedIfAllowed(path, data, defaultCreatePerm)
 }
 
 // writeManagedIfAllowed writes data only when path is absent or first-line marked.
 // Unmarked existing files are left intact (skipped=true).
-func writeManagedIfAllowed(path string, data []byte, perm os.FileMode) (changed, skipped bool, err error) {
-	_, statErr := os.Stat(path)
-	switch {
-	case statErr == nil:
-		marked, merr := fileHasMarker(path)
-		if merr != nil {
-			return false, false, merr
+// Existing marked files keep their Mode().Perm(); create uses createPerm.
+// Dangling symlinks error (do not replace the link with a regular file).
+func writeManagedIfAllowed(path string, data []byte, createPerm os.FileMode) (changed, skipped bool, err error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			changed, err = writeIfChanged(path, data, createPerm)
+			return changed, false, err
 		}
-		if !marked {
-			return false, true, nil
-		}
-		// marked: fall through to writeIfChanged
-	case os.IsNotExist(statErr):
-		// create
-	default:
-		return false, false, statErr
+		return false, false, err
 	}
-	changed, err = writeIfChanged(path, data, perm)
+	if fi.Mode()&os.ModeSymlink != 0 {
+		if _, err := filepath.EvalSymlinks(path); err != nil {
+			return false, false, fmt.Errorf("resolve symlink %s: %w", path, err)
+		}
+	}
+	marked, err := fileHasMarker(path)
+	if err != nil {
+		return false, false, err
+	}
+	if !marked {
+		return false, true, nil
+	}
+	changed, err = writeIfChanged(path, data, createPerm)
 	return changed, false, err
 }
 
 // writeIfChanged atomically writes data when it differs from existing content
-// (or the file is absent). Returns whether a write occurred.
-func writeIfChanged(path string, data []byte, perm os.FileMode) (bool, error) {
-	if existing, err := os.ReadFile(path); err == nil {
+// (or the file is absent). Preserves existing permissions; createPerm only when
+// the write target does not yet exist. Resolves symlinks to write-through.
+func writeIfChanged(path string, data []byte, createPerm os.FileMode) (bool, error) {
+	target, err := resolveWriteTarget(path)
+	if err != nil {
+		return false, err
+	}
+	if existing, err := os.ReadFile(target); err == nil {
 		if bytes.Equal(existing, data) {
 			return false, nil
 		}
 	} else if !os.IsNotExist(err) {
 		return false, err
 	}
-	if err := atomicWriteFile(path, data, perm); err != nil {
+	perm := filePermOr(target, createPerm)
+	if err := atomicWriteFile(target, data, perm); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 // fileHasMarker reports whether path exists and its first line contains FileMarker.
-// Missing files return (false, nil).
+// Missing files return (false, nil). Read follows symlinks.
 func fileHasMarker(path string) (bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

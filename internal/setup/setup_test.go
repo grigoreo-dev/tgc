@@ -239,19 +239,23 @@ func TestRun_PathAlreadyContains_SkipExport(t *testing.T) {
 	e := testEnv(t, "bash")
 	binDir := filepath.Join(e.Home, "bin")
 	e.Path = "/usr/bin:" + binDir + ":/bin"
+	// Pre-create rc so we can assert it is left without a markers-only block.
+	rc, _ := e.RcFile("bash")
+	if err := os.WriteFile(rc, []byte("# existing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	r := mustRun(t, e, binDir, "bash", fakeGen("p"))
 	if !r.PathConfigured {
 		t.Fatal("PathConfigured still true when already on PATH")
 	}
-	rc, _ := e.RcFile("bash")
 	content := readFile(t, rc)
 	exportLine := `export PATH="` + binDir + `:$PATH"`
 	if strings.Contains(content, exportLine) {
 		t.Fatalf("export line should be skipped when PathContains:\n%s", content)
 	}
-	// Block still present (markers).
-	if !strings.Contains(content, BlockStart) {
-		t.Fatalf("block markers expected even without export:\n%s", content)
+	// Bash: no body lines → do not write an empty managed block.
+	if strings.Contains(content, BlockStart) {
+		t.Fatalf("bash must not write markers-only block when PATH preset:\n%s", content)
 	}
 }
 
@@ -290,6 +294,173 @@ func TestRun_RcAbsentCreated(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0o644 {
 		t.Fatalf("rc perm=%o want 0644", got)
 	}
+}
+
+// C1: rewriting an existing rc must not widen permissions (e.g. 0600 → 0644).
+func TestRun_PreservesExistingRcPermissions(t *testing.T) {
+	e := testEnv(t, "zsh")
+	binDir := filepath.Join(e.Home, "bin")
+	rc, _ := e.RcFile("zsh")
+	if err := os.WriteFile(rc, []byte("# secret zshrc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, e, binDir, "zsh", fakeGen("perm"))
+	info, err := os.Stat(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("after Run perm=%o want 0600 (must not widen)", got)
+	}
+	// Remove rewrites rc when removing the block — still preserve 0600.
+	if _, err := Remove(e, "zsh"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	info, err = os.Stat(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("after Remove perm=%o want 0600", got)
+	}
+}
+
+// C1: marked completion rewrite preserves existing perms.
+func TestRun_PreservesMarkedCompletionPermissions(t *testing.T) {
+	e := testEnv(t, "bash")
+	binDir := filepath.Join(e.Home, "bin")
+	comp, _ := e.CompletionPath("bash")
+	if err := os.MkdirAll(filepath.Dir(comp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-create marked completion with restrictive perms; Run regenerates content.
+	body := FileMarker + "\nCOMP:bash:old\n"
+	if err := os.WriteFile(comp, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, e, binDir, "bash", fakeGen("new"))
+	info, err := os.Stat(comp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("completion perm=%o want 0600", got)
+	}
+	if !strings.Contains(readFile(t, comp), "COMP:bash:new") {
+		t.Fatal("content should have been regenerated")
+	}
+}
+
+// I2: symlinked rc must stay a symlink; content updates on the target.
+func TestRun_SymlinkedRc_WriteThrough(t *testing.T) {
+	e := testEnv(t, "zsh")
+	binDir := filepath.Join(e.Home, "bin")
+	rc, _ := e.RcFile("zsh")
+	// Dotfile manager layout: ~/.zshrc → real file elsewhere.
+	targetDir := filepath.Join(e.Home, "dotfiles")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "zshrc")
+	if err := os.WriteFile(target, []byte("# managed by stow\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, rc); err != nil {
+		t.Fatal(err)
+	}
+
+	r := mustRun(t, e, binDir, "zsh", fakeGen("sl"))
+	// Symlink identity preserved.
+	fi, err := os.Lstat(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("rc symlink was replaced by a regular file")
+	}
+	// Target got the block; symlink still points at target.
+	content := readFile(t, target)
+	if !strings.Contains(content, BlockStart) {
+		t.Fatalf("target missing managed block:\n%s", content)
+	}
+	if !strings.Contains(content, "# managed by stow") {
+		t.Fatalf("target user content lost:\n%s", content)
+	}
+	// Permissions on target preserved.
+	ti, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ti.Mode().Perm(); got != 0o600 {
+		t.Fatalf("target perm=%o want 0600", got)
+	}
+	// Result.RcFile is still the logical path under Home.
+	if r.RcFile != rc {
+		t.Fatalf("RcFile=%q want %q", r.RcFile, rc)
+	}
+}
+
+// I2: dangling rc symlink → clear io_error (do not replace link with regular file).
+func TestRun_DanglingRcSymlink_IOError(t *testing.T) {
+	e := testEnv(t, "bash")
+	binDir := filepath.Join(e.Home, "bin")
+	rc, _ := e.RcFile("bash")
+	if err := os.Symlink(filepath.Join(e.Home, "missing-target"), rc); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Run(e, binDir, "bash", fakeGen("dangle"))
+	if err == nil {
+		t.Fatal("expected io_error for dangling symlink")
+	}
+	if errCode(err) != "io_error" {
+		t.Fatalf("code=%q want io_error; err=%v", errCode(err), err)
+	}
+	// Symlink still a symlink (not replaced).
+	fi, err := os.Lstat(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("dangling symlink was replaced")
+	}
+}
+
+func TestRun_EmptyShellDetectionMessage(t *testing.T) {
+	e := testEnv(t, "bash")
+	e.Shell = ""
+	_, err := Run(e, filepath.Join(e.Home, "bin"), "", fakeGen("x"))
+	if err == nil {
+		t.Fatal("expected unsupported_shell")
+	}
+	if errCode(err) != "unsupported_shell" {
+		t.Fatalf("code=%q err=%v", errCode(err), err)
+	}
+	if !strings.Contains(err.Error(), "could not be detected") {
+		t.Fatalf("message should say shell could not be detected: %v", err)
+	}
+}
+
+// Empty bash block when PATH already has binDir: do not write a markers-only block.
+func TestRun_BashPathPreset_NoEmptyBlock(t *testing.T) {
+	e := testEnv(t, "bash")
+	binDir := filepath.Join(e.Home, "bin")
+	e.Path = binDir + ":/usr/bin"
+	rc, _ := e.RcFile("bash")
+	if err := os.WriteFile(rc, []byte("# keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := mustRun(t, e, binDir, "bash", fakeGen("p"))
+	if !r.PathConfigured {
+		t.Fatal("PathConfigured still true")
+	}
+	content := readFile(t, rc)
+	if strings.Contains(content, BlockStart) {
+		t.Fatalf("should not write empty bash managed block:\n%s", content)
+	}
+	if content != "# keep\n" {
+		t.Fatalf("user rc mutated: %q", content)
+	}
+	// zsh still needs fpath even when PATH is preset — covered by TestRun_ZshPathPreset_StillHasFpath.
 }
 
 // I1: existing unmarked completion must never be rewritten by Run.

@@ -45,12 +45,15 @@ func Run(e Env, binDir, shell string, gen Generator) (*Result, error) {
 		}
 		res.RcFile = rc
 		block := buildRCBlock(e, binDir, shell)
-		changed, err := upsertRCFile(rc, block)
-		if err != nil {
-			return nil, wrapIO(err, "write rc %s", rc)
-		}
-		if changed {
-			res.Changed = append(res.Changed, rc)
+		// Empty block (bash + PATH already set): do not write markers-only block.
+		if block != "" {
+			changed, err := upsertRCFile(rc, block)
+			if err != nil {
+				return nil, wrapIO(err, "write rc %s", rc)
+			}
+			if changed {
+				res.Changed = append(res.Changed, rc)
+			}
 		}
 		res.PathConfigured = true
 
@@ -59,7 +62,7 @@ func Run(e Env, binDir, shell string, gen Generator) (*Result, error) {
 		conf := e.FishConfDPath()
 		body := buildFishConf(e, binDir)
 		// Marker discipline: never rewrite unmarked conf.d (I1).
-		changed, skipped, err := writeManagedIfAllowed(conf, []byte(body), 0o644)
+		changed, skipped, err := writeManagedIfAllowed(conf, []byte(body), defaultCreatePerm)
 		if err != nil {
 			return nil, wrapIO(err, "write fish conf.d %s", conf)
 		}
@@ -157,6 +160,10 @@ func Remove(e Env, shell string) (*Result, error) {
 
 func resolveShell(e Env, shell string) (string, error) {
 	if shell == "" {
+		if strings.TrimSpace(e.Shell) == "" {
+			return "", output.Errf("unsupported_shell",
+				"shell could not be detected; pass --shell bash|zsh|fish, or run 'tgc completion <shell>' manually")
+		}
 		shell = filepath.Base(e.Shell)
 	}
 	shell = strings.TrimSpace(shell)
@@ -174,17 +181,25 @@ func unsupportedShell(shell string) error {
 		shell)
 }
 
+// buildRCBlock returns a full managed block, or "" when there is nothing to
+// inject (bash with binDir already on PATH — no export and no fpath).
+// zsh always includes fpath even when PATH is already set.
 func buildRCBlock(e Env, binDir, shell string) string {
-	var lines []string
-	lines = append(lines, BlockStart)
+	var body []string
 	if !e.PathContains(binDir) {
-		lines = append(lines, `export PATH="`+binDir+`:$PATH"`)
+		body = append(body, `export PATH="`+binDir+`:$PATH"`)
 	}
 	if shell == "zsh" {
 		if comp, err := e.CompletionPath("zsh"); err == nil {
-			lines = append(lines, "fpath=("+filepath.Dir(comp)+" $fpath)")
+			body = append(body, "fpath=("+filepath.Dir(comp)+" $fpath)")
 		}
 	}
+	if len(body) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(body)+2)
+	lines = append(lines, BlockStart)
+	lines = append(lines, body...)
 	lines = append(lines, BlockEnd)
 	return strings.Join(lines, "\n")
 }
@@ -199,13 +214,16 @@ func buildFishConf(e Env, binDir string) string {
 }
 
 func upsertRCFile(path, block string) (bool, error) {
+	target, err := resolveWriteTarget(path)
+	if err != nil {
+		return false, err
+	}
 	var content string
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(target)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return false, err
 		}
-		// Absent: create from empty.
 		content = ""
 	} else {
 		content = string(b)
@@ -214,14 +232,21 @@ func upsertRCFile(path, block string) (bool, error) {
 	if !changed {
 		return false, nil
 	}
-	if err := atomicWriteFile(path, []byte(newContent), 0o644); err != nil {
+	perm := filePermOr(target, defaultCreatePerm)
+	if err := atomicWriteFile(target, []byte(newContent), perm); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 func removeRCBlock(path string) (bool, error) {
-	b, err := os.ReadFile(path)
+	// If the rc path is a dangling symlink, surface a clear error rather than
+	// replacing the link or silently no-op'ing.
+	target, err := resolveWriteTarget(path)
+	if err != nil {
+		return false, err
+	}
+	b, err := os.ReadFile(target)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -232,7 +257,8 @@ func removeRCBlock(path string) (bool, error) {
 	if !changed {
 		return false, nil
 	}
-	if err := atomicWriteFile(path, []byte(newContent), 0o644); err != nil {
+	perm := filePermOr(target, defaultCreatePerm)
+	if err := atomicWriteFile(target, []byte(newContent), perm); err != nil {
 		return false, err
 	}
 	return true, nil
