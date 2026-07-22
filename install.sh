@@ -1,7 +1,7 @@
 #!/bin/sh
 # tgc installer — downloads a release binary from GitHub (no Go required).
 #   curl -fsSL https://raw.githubusercontent.com/grigoreo-dev/tgc/main/install.sh | sh
-# Env: TGC_VERSION=vX.Y.Z, TGC_INSTALL_DIR=/path, GITHUB_TOKEN / GH_TOKEN
+# Env: TGC_VERSION=vX.Y.Z, TGC_INSTALL_DIR=/path, TGC_NO_SETUP=1, GITHUB_TOKEN / GH_TOKEN
 set -eu
 
 REPO="grigoreo-dev/tgc"
@@ -89,22 +89,39 @@ if [ "$DIR" = "/usr/local/bin" ] && [ ! -w "$DIR" ]; then
     # this script runs via `curl | sh` and stdin is the pipe. Not a bug.
     # shellcheck disable=SC2024
     sudo mv "${TMP}/${BINARY}" "${DIR}/${BINARY}" </dev/tty || err "sudo install failed"
-    info "Installed ${BINARY} to ${DIR}/${BINARY}"
-    exit 0
+  else
+    err "cannot write ${DIR}; re-run with TGC_INSTALL_DIR=\$HOME/.local/bin or install manually"
   fi
-  err "cannot write ${DIR}; re-run with TGC_INSTALL_DIR=\$HOME/.local/bin or install manually"
+else
+  mkdir -p "$DIR"
+  mv "${TMP}/${BINARY}" "${DIR}/${BINARY}"
 fi
-
-mkdir -p "$DIR"
-mv "${TMP}/${BINARY}" "${DIR}/${BINARY}"
 info "Installed ${BINARY} ${VERSION} to ${DIR}/${BINARY}"
 
-# --- PATH hint ---
-case ":$PATH:" in
-  *":${DIR}:"*) ;;
-  *)
-    info ""
-    info "Add ${DIR} to your PATH:"
-    info "    export PATH=\"${DIR}:\$PATH\""
-    ;;
-esac
+# --- PATH hint (fallback when setup is skipped or fails) ---
+path_hint() {
+  case ":$PATH:" in
+    *":${DIR}:"*) ;;
+    *)
+      info ""
+      info "Add ${DIR} to your PATH:"
+      info "    export PATH=\"${DIR}:\$PATH\""
+      ;;
+  esac
+}
+
+# --- post-install: PATH + shell completion via tgc self setup ---
+# Opt out with TGC_NO_SETUP=1 (binary install still succeeds).
+if [ "${TGC_NO_SETUP:-}" = "1" ]; then
+  info "Skipping self setup (TGC_NO_SETUP=1)."
+  path_hint
+else
+  info "Configuring PATH and shell completion..."
+  if ! "$DIR/$BINARY" self setup; then
+    info "warning: tgc self setup failed; binary install succeeded."
+    info "Configure manually:"
+    info "    tgc self setup"
+    info "    tgc completion <shell>   # generate script to stdout"
+    path_hint
+  fi
+fi

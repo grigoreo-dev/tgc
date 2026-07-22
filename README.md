@@ -47,7 +47,20 @@ curl -fsSL https://raw.githubusercontent.com/grigoreo-dev/tgc/main/install.sh | 
 
 Env knobs: `TGC_VERSION=vX.Y.Z` for a specific version, `TGC_INSTALL_DIR` for a
 custom directory (default `~/.local/bin`), `GITHUB_TOKEN`/`GH_TOKEN` to avoid API
-rate limits.
+rate limits, `TGC_NO_SETUP=1` to skip post-install PATH/completion setup.
+
+After install, the script runs `tgc self setup` so new shell sessions find
+`tgc` on PATH and get bash/zsh/fish completion (per-user). Setup failure is a
+warning only — the binary install still succeeds. Opt out with
+`TGC_NO_SETUP=1`. Re-run anytime with `tgc self setup`; reverse with
+`tgc self setup --remove` (removes only the managed rc block and marked files).
+
+`tgc completion <shell>` **generates** a completion script to stdout (for manual
+install). `tgc self setup` **installs** the same scripts into standard
+per-user locations. Prefer setup for day-to-day use.
+
+zsh: the managed `~/.zshrc` block updates `fpath` before completion loads —
+keep `compinit` after that block (default layouts usually already do).
 
 Prefer to inspect first? Download `install.sh`, read it, then run it.
 
@@ -59,7 +72,8 @@ go install github.com/grigoreo-dev/tgc/cmd/tgc@latest
 
 > A `go install` build reports version `dev` and does **not** auto-check for
 > updates or self-update. For automatic update checks and `tgc self update`,
-> install via the script above.
+> install via the script above. After `go install`, run `tgc self setup` once
+> if you want PATH/completion wired the same way.
 
 ### Updating
 
@@ -70,7 +84,8 @@ tgc self check     # report {"update_available":...} without installing
 
 While a newer release is available, tgc prints a one-line
 `{"warning":"update_available",...}` to stderr on each run. Set
-`TGC_NO_UPDATE_CHECK=1` to disable the check entirely.
+`TGC_NO_UPDATE_CHECK=1` to disable the check entirely. After a successful
+update, marked completion files installed by `tgc self setup` are refreshed.
 
 > Security: releases are verified by sha256 checksum over HTTPS. Publisher
 > signature verification (cosign) is planned for a future release.
