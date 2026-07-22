@@ -202,28 +202,36 @@ func TestRun_DetectShellFromEnv(t *testing.T) {
 }
 
 func TestRun_IdempotentSecondRunChangedEmpty(t *testing.T) {
-	e := testEnv(t, "bash")
-	binDir := filepath.Join(e.Home, "bin")
-	gen := fakeGen("same")
-	r1 := mustRun(t, e, binDir, "bash", gen)
-	if len(r1.Changed) == 0 {
-		t.Fatal("first run must change something")
-	}
-	r2 := mustRun(t, e, binDir, "bash", gen)
-	if r2.Changed == nil {
-		t.Fatal("Changed must be non-nil empty slice on no-op")
-	}
-	if len(r2.Changed) != 0 {
-		t.Fatalf("second run Changed=%v want empty", r2.Changed)
-	}
-	if !r2.PathConfigured || !r2.CompletionInstalled {
-		t.Fatalf("flags still true: %+v", r2)
-	}
-	// Exactly one block.
-	rc, _ := e.RcFile("bash")
-	content := readFile(t, rc)
-	if strings.Count(content, BlockStart) != 1 {
-		t.Fatalf("want one block after two runs:\n%s", content)
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		t.Run(shell, func(t *testing.T) {
+			e := testEnv(t, shell)
+			binDir := filepath.Join(e.Home, "bin")
+			gen := fakeGen("same")
+			r1 := mustRun(t, e, binDir, shell, gen)
+			if len(r1.Changed) == 0 {
+				t.Fatal("first run must change something")
+			}
+			r2 := mustRun(t, e, binDir, shell, gen)
+			if r2.Changed == nil {
+				t.Fatal("Changed must be non-nil empty slice on no-op")
+			}
+			if len(r2.Changed) != 0 {
+				t.Fatalf("second run Changed=%v want empty", r2.Changed)
+			}
+			if !r2.PathConfigured || !r2.CompletionInstalled {
+				t.Fatalf("flags still true: %+v", r2)
+			}
+			if len(r2.Skipped) != 0 {
+				t.Fatalf("idempotent run should not skip: %v", r2.Skipped)
+			}
+			if shell == "bash" || shell == "zsh" {
+				rc, _ := e.RcFile(shell)
+				content := readFile(t, rc)
+				if strings.Count(content, BlockStart) != 1 {
+					t.Fatalf("want one block after two runs:\n%s", content)
+				}
+			}
+		})
 	}
 }
 
@@ -279,8 +287,122 @@ func TestRun_RcAbsentCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rc not created: %v", err)
 	}
-	if info.Mode().Perm()&0200 == 0 {
-		t.Fatalf("rc not writable: mode %v", info.Mode())
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("rc perm=%o want 0644", got)
+	}
+}
+
+// I1: existing unmarked completion must never be rewritten by Run.
+func TestRun_UnmarkedCompletionSkipped(t *testing.T) {
+	e := testEnv(t, "bash")
+	binDir := filepath.Join(e.Home, "bin")
+	comp, err := e.CompletionPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(comp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unmarked := "# user-owned completion\ncompdef _tgc tgc\n"
+	if err := os.WriteFile(comp, []byte(unmarked), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := mustRun(t, e, binDir, "bash", fakeGen("would-overwrite"))
+	if got := readFile(t, comp); got != unmarked {
+		t.Fatalf("unmarked completion rewritten:\ngot  %q\nwant %q", got, unmarked)
+	}
+	for _, p := range r.Changed {
+		if p == comp {
+			t.Fatalf("Changed must not list skipped completion: %v", r.Changed)
+		}
+	}
+	found := false
+	for _, p := range r.Skipped {
+		if p == comp {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Skipped must list unmarked completion path, got %v", r.Skipped)
+	}
+	if r.CompletionInstalled {
+		t.Fatal("CompletionInstalled must be false when completion was skipped")
+	}
+	// PATH/rc still configured.
+	if !r.PathConfigured {
+		t.Fatal("PathConfigured still true when only completion skipped")
+	}
+}
+
+// I1: existing unmarked fish conf.d must never be rewritten by Run.
+func TestRun_UnmarkedFishConfDSkipped(t *testing.T) {
+	e := testEnv(t, "fish")
+	binDir := filepath.Join(e.Home, "bin")
+	conf := e.FishConfDPath()
+	if err := os.MkdirAll(filepath.Dir(conf), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unmarked := "# custom fish path\nfish_add_path /opt/custom\n"
+	if err := os.WriteFile(conf, []byte(unmarked), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := mustRun(t, e, binDir, "fish", fakeGen("f"))
+	if got := readFile(t, conf); got != unmarked {
+		t.Fatalf("unmarked fish conf.d rewritten:\ngot  %q\nwant %q", got, unmarked)
+	}
+	for _, p := range r.Changed {
+		if p == conf {
+			t.Fatalf("Changed must not list skipped conf.d: %v", r.Changed)
+		}
+	}
+	found := false
+	for _, p := range r.Skipped {
+		if p == conf {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Skipped must list unmarked conf.d, got %v", r.Skipped)
+	}
+	// Completion (absent) should still install.
+	comp, _ := e.CompletionPath("fish")
+	if !strings.Contains(readFile(t, comp), "COMP:fish:f") {
+		t.Fatal("completion should still install when conf.d skipped")
+	}
+	if !r.CompletionInstalled {
+		t.Fatal("CompletionInstalled true when completion written")
+	}
+}
+
+// M1: generator failure is a single io_error, not double-wrapped.
+func TestRun_GeneratorError_SingleIOError(t *testing.T) {
+	e := testEnv(t, "bash")
+	binDir := filepath.Join(e.Home, "bin")
+	gen := func(shell string, w io.Writer) error {
+		return errors.New("gen boom")
+	}
+	_, err := Run(e, binDir, "bash", gen)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if errCode(err) != "io_error" {
+		t.Fatalf("code=%q want io_error; err=%v", errCode(err), err)
+	}
+	// Message should not nest another structured "io_error:" prefix from double wrap.
+	msg := err.Error()
+	if strings.Count(msg, "io_error") > 1 {
+		t.Fatalf("double-wrapped io_error: %q", msg)
+	}
+	var oe *output.Error
+	if !errors.As(err, &oe) {
+		t.Fatal("want *output.Error")
+	}
+	if strings.Contains(oe.Message, "io_error:") {
+		t.Fatalf("message re-wraps Error.Error(): %q", oe.Message)
 	}
 }
 

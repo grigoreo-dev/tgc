@@ -10,16 +10,22 @@ import (
 
 // Result is the structured outcome of Run or Remove.
 // Changed lists touched file paths; empty non-nil slice on no-op.
+// Skipped lists existing unmarked managed-target files left intact (warn-friendly).
 type Result struct {
 	Shell               string   `json:"shell"`
 	PathConfigured      bool     `json:"path_configured"`
 	CompletionInstalled bool     `json:"completion_installed"`
 	RcFile              string   `json:"rc_file,omitempty"`
 	Changed             []string `json:"changed"`
+	Skipped             []string `json:"skipped,omitempty"`
 }
 
 // Run installs PATH configuration and completion for shell.
 // If shell is empty, it is detected from the basename of e.Shell.
+//
+// Multi-file non-atomicity (accepted): rc/conf.d is written before completion.
+// A failure on the second write can leave the first file already updated; callers
+// treat that as a partial apply with io_error (no success Result).
 func Run(e Env, binDir, shell string, gen Generator) (*Result, error) {
 	shell, err := resolveShell(e, shell)
 	if err != nil {
@@ -41,7 +47,7 @@ func Run(e Env, binDir, shell string, gen Generator) (*Result, error) {
 		block := buildRCBlock(e, binDir, shell)
 		changed, err := upsertRCFile(rc, block)
 		if err != nil {
-			return nil, output.Errf("io_error", "write rc %s: %v", rc, err)
+			return nil, wrapIO(err, "write rc %s", rc)
 		}
 		if changed {
 			res.Changed = append(res.Changed, rc)
@@ -52,13 +58,19 @@ func Run(e Env, binDir, shell string, gen Generator) (*Result, error) {
 		res.RcFile = ""
 		conf := e.FishConfDPath()
 		body := buildFishConf(e, binDir)
-		changed, err := writeIfChanged(conf, []byte(body), 0o644)
+		// Marker discipline: never rewrite unmarked conf.d (I1).
+		changed, skipped, err := writeManagedIfAllowed(conf, []byte(body), 0o644)
 		if err != nil {
-			return nil, output.Errf("io_error", "write fish conf.d %s: %v", conf, err)
+			return nil, wrapIO(err, "write fish conf.d %s", conf)
 		}
-		if changed {
+		if skipped {
+			res.Skipped = append(res.Skipped, conf)
+		} else if changed {
 			res.Changed = append(res.Changed, conf)
 		}
+		// PATH is considered configured when we manage conf.d or it was already
+		// present (user-owned). Either way the user has a path story; for
+		// unmarked we did not touch it.
 		res.PathConfigured = true
 
 	default:
@@ -69,14 +81,20 @@ func Run(e Env, binDir, shell string, gen Generator) (*Result, error) {
 	if err != nil {
 		return nil, unsupportedShell(shell)
 	}
-	compChanged, err := writeCompletion(compPath, shell, gen)
+	// Marker discipline: never rewrite unmarked completion (I1).
+	compChanged, compSkipped, err := writeCompletion(compPath, shell, gen)
 	if err != nil {
-		return nil, output.Errf("io_error", "write completion %s: %v", compPath, err)
+		return nil, wrapIO(err, "write completion %s", compPath)
 	}
-	if compChanged {
-		res.Changed = append(res.Changed, compPath)
+	if compSkipped {
+		res.Skipped = append(res.Skipped, compPath)
+		res.CompletionInstalled = false
+	} else {
+		if compChanged {
+			res.Changed = append(res.Changed, compPath)
+		}
+		res.CompletionInstalled = true
 	}
-	res.CompletionInstalled = true
 	return res, nil
 }
 
@@ -102,7 +120,7 @@ func Remove(e Env, shell string) (*Result, error) {
 		res.RcFile = rc
 		changed, err := removeRCBlock(rc)
 		if err != nil {
-			return nil, output.Errf("io_error", "update rc %s: %v", rc, err)
+			return nil, wrapIO(err, "update rc %s", rc)
 		}
 		if changed {
 			res.Changed = append(res.Changed, rc)
@@ -113,7 +131,7 @@ func Remove(e Env, shell string) (*Result, error) {
 		conf := e.FishConfDPath()
 		removed, err := deleteIfMarked(conf)
 		if err != nil {
-			return nil, output.Errf("io_error", "remove fish conf.d %s: %v", conf, err)
+			return nil, wrapIO(err, "remove fish conf.d %s", conf)
 		}
 		if removed {
 			res.Changed = append(res.Changed, conf)
@@ -129,7 +147,7 @@ func Remove(e Env, shell string) (*Result, error) {
 	}
 	removed, err := deleteIfMarked(compPath)
 	if err != nil {
-		return nil, output.Errf("io_error", "remove completion %s: %v", compPath, err)
+		return nil, wrapIO(err, "remove completion %s", compPath)
 	}
 	if removed {
 		res.Changed = append(res.Changed, compPath)

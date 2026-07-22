@@ -15,9 +15,12 @@ func TestWriteCompletion_AtomicAndMarked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed, err := writeCompletion(path, "bash", fakeGen("atom"))
+	changed, skipped, err := writeCompletion(path, "bash", fakeGen("atom"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if skipped {
+		t.Fatal("absent path must not be skipped")
 	}
 	if !changed {
 		t.Fatal("first write should change")
@@ -34,12 +37,12 @@ func TestWriteCompletion_AtomicAndMarked(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Idempotent.
-	changed2, err := writeCompletion(path, "bash", fakeGen("atom"))
+	changed2, skipped2, err := writeCompletion(path, "bash", fakeGen("atom"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changed2 {
-		t.Fatal("identical content should not report change")
+	if skipped2 || changed2 {
+		t.Fatalf("identical marked content: changed=%v skipped=%v", changed2, skipped2)
 	}
 }
 
@@ -49,12 +52,34 @@ func TestWriteCompletion_GeneratorError(t *testing.T) {
 	gen := func(shell string, w io.Writer) error {
 		return errors.New("gen boom")
 	}
-	_, err := writeCompletion(path, "bash", gen)
+	_, _, err := writeCompletion(path, "bash", gen)
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("failed gen must not leave a completion file: %v", err)
+	}
+}
+
+func TestWriteCompletion_UnmarkedSkipped(t *testing.T) {
+	e := testEnv(t, "bash")
+	path, _ := e.CompletionPath("bash")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := "# hand-written\n"
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, skipped, err := writeCompletion(path, "bash", fakeGen("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !skipped || changed {
+		t.Fatalf("want skipped unmarked: changed=%v skipped=%v", changed, skipped)
+	}
+	if readFile(t, path) != orig {
+		t.Fatal("unmarked bytes mutated")
 	}
 }
 
