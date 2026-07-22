@@ -51,15 +51,33 @@ var selfUpdateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		res, err := selfupdate.Update(ctx)
+		// Post-apply refreshes marked completion scripts after a successful
+		// binary replace. Hook lives in selfupdate as a functional option so
+		// that package stays free of cobra/cli imports.
+		var refreshErr error
+		res, err := selfupdate.Update(ctx, selfupdate.WithPostApply(func() ([]string, error) {
+			paths, rerr := setup.RefreshMarked(realSetupEnv(), completionGenerator())
+			if rerr != nil {
+				refreshErr = rerr
+				return nil, rerr
+			}
+			return paths, nil
+		}))
 		if err != nil {
 			return err
 		}
-		output.Emit(map[string]any{
+		if refreshErr != nil {
+			output.Warnf("completion_refresh_failed", "refresh marked completions after update: %v", refreshErr)
+		}
+		out := map[string]any{
 			"updated": res.UpdateAvailable,
 			"current": res.Current,
 			"latest":  res.Latest,
-		})
+		}
+		if len(res.CompletionsRefreshed) > 0 {
+			out["completions_refreshed"] = res.CompletionsRefreshed
+		}
+		output.Emit(out)
 		return nil
 	},
 }
