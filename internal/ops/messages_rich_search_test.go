@@ -5,6 +5,9 @@ import (
 	"time"
 
 	"github.com/gotd/td/tg"
+
+	"github.com/grigoreo-dev/tgc/internal/markup"
+	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
 
 func partRich(id int, peer tg.PeerClass, plain string) *tg.Message {
@@ -17,6 +20,10 @@ func partRich(id int, peer tg.PeerClass, plain string) *tg.Message {
 
 func fullRichBlocks() []tg.PageBlockClass {
 	return []tg.PageBlockClass{&tg.PageBlockParagraph{Text: &tg.TextPlain{Text: "full"}}}
+}
+
+func fullRichBlocksText(s string) []tg.PageBlockClass {
+	return []tg.PageBlockClass{&tg.PageBlockParagraph{Text: &tg.TextPlain{Text: s}}}
 }
 
 // Two peers can share the same message ID; global plans must keep them distinct.
@@ -36,20 +43,78 @@ func TestPlanGlobalRichFetchesDistinctSameMsgID(t *testing.T) {
 	}
 	seen := map[globalRichKey]bool{}
 	for _, p := range plans {
-		k := globalRichKey{ChatID: p.ChatID, MsgID: p.MsgID}
-		if seen[k] {
-			t.Fatalf("duplicate plan key %+v", k)
+		if seen[p.Key] {
+			t.Fatalf("duplicate plan key %+v", p.Key)
 		}
-		seen[k] = true
-		if p.MsgID != 42 {
-			t.Fatalf("msg id = %d, want 42", p.MsgID)
+		seen[p.Key] = true
+		if p.Key.MsgID != 42 {
+			t.Fatalf("msg id = %d, want 42", p.Key.MsgID)
 		}
 		if p.Peer == nil {
-			t.Fatalf("peer must be derived for chat %d", p.ChatID)
+			t.Fatalf("peer must be derived for key %+v", p.Key)
 		}
 	}
-	if !seen[globalRichKey{ChatID: 10, MsgID: 42}] || !seen[globalRichKey{ChatID: 20, MsgID: 42}] {
-		t.Fatalf("keys = %v, want chat 10 and 20 with id 42", seen)
+	want1 := globalRichKey{Kind: peerKindUser, PeerID: 10, MsgID: 42}
+	want2 := globalRichKey{Kind: peerKindUser, PeerID: 20, MsgID: 42}
+	if !seen[want1] || !seen[want2] {
+		t.Fatalf("keys = %v, want %+v and %+v", seen, want1, want2)
+	}
+}
+
+// PeerUser(1), PeerChat(1), PeerChannel(1) share a numeric id but must stay
+// distinct internal keys; public chat_id may still be 1 for all three.
+func TestPlanGlobalRichFetchesDistinctPeerKindsSameNumericID(t *testing.T) {
+	u := &tg.User{ID: 1, AccessHash: 11}
+	basic := &tg.Chat{ID: 1, Title: "basic"}
+	ch := &tg.Channel{ID: 1, AccessHash: 22, Title: "chan"}
+	mUser := partRich(42, &tg.PeerUser{UserID: 1}, "u-partial")
+	mChat := partRich(42, &tg.PeerChat{ChatID: 1}, "g-partial")
+	mChan := partRich(42, &tg.PeerChannel{ChannelID: 1}, "c-partial")
+	res := &tg.MessagesMessages{
+		Messages: []tg.MessageClass{mUser, mChat, mChan},
+		Users:    []tg.UserClass{u},
+		Chats:    []tg.ChatClass{basic, ch},
+	}
+	maps := collectMessages(res, 0, timeZero())
+	if len(maps) != 3 {
+		t.Fatalf("maps = %d, want 3", len(maps))
+	}
+	// Historical public chat_id is plain peerID for all three (=1).
+	for i, mp := range maps {
+		if mp["chat_id"] != int64(1) || mp["id"] != 42 {
+			t.Fatalf("map[%d] public ids = chat_id=%v id=%v, want 1/42", i, mp["chat_id"], mp["id"])
+		}
+	}
+
+	plans := planGlobalRichFetches(res, maps, nil)
+	if len(plans) != 3 {
+		t.Fatalf("plans = %d, want 3 distinct peer kinds", len(plans))
+	}
+	byKey := indexMapsByGlobalResponse(res, maps)
+	if len(byKey) != 3 {
+		t.Fatalf("index size = %d, want 3 (kinds must not collide)", len(byKey))
+	}
+	kUser := globalRichKey{Kind: peerKindUser, PeerID: 1, MsgID: 42}
+	kChat := globalRichKey{Kind: peerKindChat, PeerID: 1, MsgID: 42}
+	kChan := globalRichKey{Kind: peerKindChannel, PeerID: 1, MsgID: 42}
+	for _, k := range []globalRichKey{kUser, kChat, kChan} {
+		if byKey[k] == nil {
+			t.Fatalf("missing map for key %+v", k)
+		}
+	}
+
+	// Apply full render only to the user map; chat/channel stay partial.
+	full := tg.RichMessage{Blocks: fullRichBlocksText("user-full")}
+	applyFetchedRichRender(byKey[kUser], "u-partial", full, nil)
+	if byKey[kUser]["text"] != "u-partial\n\nuser-full" {
+		t.Fatalf("user text = %q", byKey[kUser]["text"])
+	}
+	if byKey[kChat]["text"] == byKey[kUser]["text"] || byKey[kChan]["text"] == byKey[kUser]["text"] {
+		t.Fatalf("apply must not bleed across peer kinds: chat=%q chan=%q user=%q",
+			byKey[kChat]["text"], byKey[kChan]["text"], byKey[kUser]["text"])
+	}
+	if byKey[kChat]["rich_truncated"] != true || byKey[kChan]["rich_truncated"] != true {
+		t.Fatalf("unfetched kinds must remain rich_truncated")
 	}
 }
 
@@ -58,9 +123,9 @@ func TestInputPeerFromSearchPeerUserGroupChannel(t *testing.T) {
 		7: {ID: 7, AccessHash: 99},
 	}
 	chats := map[int64]tg.ChatClass{
-		42:  &tg.Chat{ID: 42, Title: "basic"},
-		55:  &tg.Channel{ID: 55, AccessHash: 12345, Title: "chan"},
-		66:  &tg.Channel{ID: 66, AccessHash: 67890, Title: "mega", Megagroup: true},
+		42: &tg.Chat{ID: 42, Title: "basic"},
+		55: &tg.Channel{ID: 55, AccessHash: 12345, Title: "chan"},
+		66: &tg.Channel{ID: 66, AccessHash: 67890, Title: "mega", Megagroup: true},
 	}
 
 	// User with access hash from response.
@@ -122,6 +187,66 @@ func TestInputPeerFromSearchPeerStorageFallback(t *testing.T) {
 	}
 }
 
+// Channel/megagroup without a usable access hash must not produce a zero-hash
+// InputPeerChannel plan (omit entirely; stay truncated).
+func TestInputPeerChannelOmitsWithoutAccessHash(t *testing.T) {
+	// No chats object, no storage.
+	if _, ok := inputPeerFromSearchPeer(&tg.PeerChannel{ChannelID: 55}, nil, nil, nil); ok {
+		t.Fatal("channel without response/storage must be omitted")
+	}
+	// *tg.Channel present but AccessHash==0, no storage.
+	chats := map[int64]tg.ChatClass{
+		55: &tg.Channel{ID: 55, AccessHash: 0, Title: "nohash"},
+		66: &tg.Channel{ID: 66, AccessHash: 0, Title: "mega", Megagroup: true},
+	}
+	if _, ok := inputPeerFromSearchPeer(&tg.PeerChannel{ChannelID: 55}, nil, chats, nil); ok {
+		t.Fatal("channel with zero AccessHash must be omitted")
+	}
+	if _, ok := inputPeerFromSearchPeer(&tg.PeerChannel{ChannelID: 66}, nil, chats, nil); ok {
+		t.Fatal("megagroup with zero AccessHash must be omitted")
+	}
+	// Planning must also skip such messages.
+	m := partRich(9, &tg.PeerChannel{ChannelID: 55}, "x")
+	res := &tg.MessagesMessages{
+		Messages: []tg.MessageClass{m},
+		Chats:    []tg.ChatClass{chats[55].(*tg.Channel)},
+	}
+	maps := collectMessages(res, 0, timeZero())
+	plans := planGlobalRichFetches(res, maps, nil)
+	if len(plans) != 0 {
+		t.Fatalf("plans = %+v, want none for zero-hash channel", plans)
+	}
+}
+
+func TestInputPeerChannelStorageFallback(t *testing.T) {
+	wantHash := int64(999)
+	storage := func(tdlibID int64) tg.InputPeerClass {
+		if tdlibID == resolve.TDLibPeerID(&tg.PeerChannel{ChannelID: 55}) {
+			return &tg.InputPeerChannel{ChannelID: 55, AccessHash: wantHash}
+		}
+		return nil
+	}
+	// No response channel object — storage supplies hash.
+	ip, ok := inputPeerFromSearchPeer(&tg.PeerChannel{ChannelID: 55}, nil, nil, storage)
+	if !ok {
+		t.Fatal("channel storage fallback must resolve")
+	}
+	ich, ok := ip.(*tg.InputPeerChannel)
+	if !ok || ich.ChannelID != 55 || ich.AccessHash != wantHash {
+		t.Fatalf("storage channel = %#v", ip)
+	}
+	// Zero-hash response channel should still fall through to storage.
+	chats := map[int64]tg.ChatClass{55: &tg.Channel{ID: 55, AccessHash: 0}}
+	ip, ok = inputPeerFromSearchPeer(&tg.PeerChannel{ChannelID: 55}, nil, chats, storage)
+	if !ok {
+		t.Fatal("zero-hash response must fall through to storage")
+	}
+	ich, ok = ip.(*tg.InputPeerChannel)
+	if !ok || ich.AccessHash != wantHash {
+		t.Fatalf("storage after zero-hash = %#v", ip)
+	}
+}
+
 func TestPlanGlobalRichFetchesOnlyPart(t *testing.T) {
 	u := &tg.User{ID: 1, AccessHash: 1}
 	part := partRich(1, &tg.PeerUser{UserID: 1}, "a")
@@ -135,12 +260,12 @@ func TestPlanGlobalRichFetchesOnlyPart(t *testing.T) {
 	}
 	maps := collectMessages(res, 0, timeZero())
 	plans := planGlobalRichFetches(res, maps, nil)
-	if len(plans) != 1 || plans[0].MsgID != 1 {
+	if len(plans) != 1 || plans[0].Key.MsgID != 1 {
 		t.Fatalf("plans = %+v, want only msg 1", plans)
 	}
 }
 
-// Service messages must not shift plan/map alignment (id-keyed, not positional).
+// Service messages must not shift plan/map alignment (key-matched, not positional-only).
 func TestPlanGlobalRichFetchesSkipsServiceNoMisalign(t *testing.T) {
 	u := &tg.User{ID: 5, AccessHash: 50}
 	svc := &tg.MessageService{ID: 10, PeerID: &tg.PeerUser{UserID: 5}}
@@ -154,30 +279,42 @@ func TestPlanGlobalRichFetchesSkipsServiceNoMisalign(t *testing.T) {
 		t.Fatalf("maps len = %d, want 1 (service dropped)", len(maps))
 	}
 	plans := planGlobalRichFetches(res, maps, nil)
-	if len(plans) != 1 || plans[0].MsgID != 11 || plans[0].ChatID != 5 {
-		t.Fatalf("plans = %+v, want single id=11 chat=5", plans)
+	want := globalRichKey{Kind: peerKindUser, PeerID: 5, MsgID: 11}
+	if len(plans) != 1 || plans[0].Key != want {
+		t.Fatalf("plans = %+v, want single %+v", plans, want)
 	}
-	// Map lookup by composite key must find the planned message.
-	byKey := indexMapsByGlobalKey(maps)
-	mp := byKey[globalRichKey{ChatID: plans[0].ChatID, MsgID: plans[0].MsgID}]
+	byKey := indexMapsByGlobalResponse(res, maps)
+	mp := byKey[plans[0].Key]
 	if mp == nil || mp["id"] != 11 {
 		t.Fatalf("map alignment failed: %v", mp)
 	}
 }
 
 // Budget/truncation semantics remain the pure applyFetchedRichRender seam
-// (already covered in messages_rich_test); verify global map index preserves
-// rich_truncated until apply clears it for a successful full render.
+// (already covered in messages_rich_test); verify peer-kind keys keep maps
+// distinct when public chat_id collides.
 func TestGlobalKeyIndexAndApplyPreservesBudgetSemantics(t *testing.T) {
 	mpA := map[string]any{"id": 1, "chat_id": int64(10), "text": "plain\n\npartial", "rich": true, "rich_truncated": true}
 	mpB := map[string]any{"id": 1, "chat_id": int64(20), "text": "plain\n\npartial", "rich": true, "rich_truncated": true}
-	byKey := indexMapsByGlobalKey([]map[string]any{mpA, mpB})
+	u1 := &tg.User{ID: 10, AccessHash: 1}
+	u2 := &tg.User{ID: 20, AccessHash: 2}
+	res := &tg.MessagesMessages{
+		Messages: []tg.MessageClass{
+			partRich(1, &tg.PeerUser{UserID: 10}, "plain"),
+			partRich(1, &tg.PeerUser{UserID: 20}, "plain"),
+		},
+		Users: []tg.UserClass{u1, u2},
+	}
+	// Use the response-paired index (same path as autofetch).
+	byKey := indexMapsByGlobalResponse(res, []map[string]any{mpA, mpB})
 	if len(byKey) != 2 {
 		t.Fatalf("index size = %d, want 2", len(byKey))
 	}
 	full := tg.RichMessage{Blocks: fullRichBlocks()}
+	kA := globalRichKey{Kind: peerKindUser, PeerID: 10, MsgID: 1}
+	kB := globalRichKey{Kind: peerKindUser, PeerID: 20, MsgID: 1}
 	// Apply only to peer 10; peer 20 stays truncated (simulates budget exhaustion path).
-	applyFetchedRichRender(byKey[globalRichKey{ChatID: 10, MsgID: 1}], "plain", full, nil)
+	applyFetchedRichRender(byKey[kA], "plain", full, nil)
 	if mpA["text"] != "plain\n\nfull" {
 		t.Fatalf("peer 10 text = %q", mpA["text"])
 	}
@@ -189,6 +326,41 @@ func TestGlobalKeyIndexAndApplyPreservesBudgetSemantics(t *testing.T) {
 	}
 	if mpB["text"] != "plain\n\npartial" {
 		t.Fatalf("peer 20 text must stay partial, got %q", mpB["text"])
+	}
+	_ = kB
+}
+
+// full-fetch matching is peer-aware: a same-ID rich body from the wrong peer
+// must not be applied (retain inline + rich_truncated).
+func TestFullRichMessageForKeyRejectsWrongPeer(t *testing.T) {
+	wrong := &tg.Message{ID: 7, Message: "other-plain", PeerID: &tg.PeerChannel{ChannelID: 99}}
+	wrong.SetRichMessage(tg.RichMessage{Blocks: fullRichBlocksText("WRONG")})
+	right := &tg.Message{ID: 7, Message: "mine-plain", PeerID: &tg.PeerUser{UserID: 1}}
+	right.SetRichMessage(tg.RichMessage{Blocks: fullRichBlocksText("RIGHT")})
+
+	key := globalRichKey{Kind: peerKindUser, PeerID: 1, MsgID: 7}
+
+	// Wrong peer only (and first): must not match.
+	onlyWrong := &tg.MessagesMessages{Messages: []tg.MessageClass{wrong}}
+	if rm := fullRichMessageForKey(onlyWrong, key); rm != nil {
+		t.Fatal("must not accept wrong-peer same-ID rich body")
+	}
+	if plain := messagePlainForKey(onlyWrong, key); plain != "" {
+		t.Fatalf("plain for wrong peer = %q, want empty", plain)
+	}
+
+	// Wrong peer first, then correct: must select the correct body.
+	both := &tg.MessagesMessages{Messages: []tg.MessageClass{wrong, right}}
+	rm := fullRichMessageForKey(both, key)
+	if rm == nil {
+		t.Fatal("expected match for correct peer")
+	}
+	md, _ := markup.RenderRichMessage(*rm, nil)
+	if md != "RIGHT" {
+		t.Fatalf("matched body = %q, want RIGHT (not wrong-peer WRONG)", md)
+	}
+	if plain := messagePlainForKey(both, key); plain != "mine-plain" {
+		t.Fatalf("plain = %q, want mine-plain", plain)
 	}
 }
 

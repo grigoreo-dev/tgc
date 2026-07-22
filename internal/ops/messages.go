@@ -149,18 +149,29 @@ func richPartIDs(res tg.MessagesMessagesClass) []int {
 	return ids
 }
 
+// peerKind discriminates wire peer types that can share a numeric id
+// (PeerUser(1) vs PeerChat(1) vs PeerChannel(1)).
+type peerKind uint8
+
+const (
+	peerKindUser peerKind = iota + 1
+	peerKindChat
+	peerKindChannel
+)
+
 // globalRichKey identifies a message in multi-peer results (global search).
-// Message IDs alone are not unique across chats.
+// It encodes peer kind + numeric peer id + message id so kinds cannot collide.
+// This is independent of the public historical chat_id field (plain peerID).
 type globalRichKey struct {
-	ChatID int64
+	Kind   peerKind
+	PeerID int64
 	MsgID  int
 }
 
 // globalRichPlan is one planned getRichMessage for a Part message in global search.
 type globalRichPlan struct {
-	ChatID int64
-	MsgID  int
-	Peer   tg.InputPeerClass
+	Key  globalRichKey
+	Peer tg.InputPeerClass
 }
 
 // peerStorageLookup returns a non-empty InputPeer from local peer storage by
@@ -168,8 +179,33 @@ type globalRichPlan struct {
 // search response lacks the peer's access hash.
 type peerStorageLookup func(tdlibID int64) tg.InputPeerClass
 
+// globalRichKeyFromPeer builds an internal multi-peer key from a wire Peer and
+// message id. Zero PeerID or unknown peer yields a zero key (Kind==0).
+func globalRichKeyFromPeer(peer tg.PeerClass, msgID int) globalRichKey {
+	switch p := peer.(type) {
+	case *tg.PeerUser:
+		return globalRichKey{Kind: peerKindUser, PeerID: p.UserID, MsgID: msgID}
+	case *tg.PeerChat:
+		return globalRichKey{Kind: peerKindChat, PeerID: p.ChatID, MsgID: msgID}
+	case *tg.PeerChannel:
+		return globalRichKey{Kind: peerKindChannel, PeerID: p.ChannelID, MsgID: msgID}
+	default:
+		return globalRichKey{}
+	}
+}
+
+// peerMatchesGlobalKey reports whether peer is the exact kind+id in key.
+func peerMatchesGlobalKey(peer tg.PeerClass, key globalRichKey) bool {
+	if key.Kind == 0 {
+		return false
+	}
+	return globalRichKeyFromPeer(peer, key.MsgID) == key
+}
+
 // inputPeerFromSearchPeer builds an InputPeer for a wire Peer using response
 // users/chats (preferred) or peer storage (fallback). No network resolves.
+// Channels/megagroups without a non-zero access hash (response or storage) are
+// omitted so we never plan a zero-hash InputPeerChannel RPC.
 func inputPeerFromSearchPeer(
 	peer tg.PeerClass,
 	users map[int64]*tg.User,
@@ -203,41 +239,61 @@ func inputPeerFromSearchPeer(
 		return &tg.InputPeerChat{ChatID: p.ChatID}, true
 	case *tg.PeerChannel:
 		if c, ok := chats[p.ChannelID]; ok {
-			if ch, ok := c.(*tg.Channel); ok {
+			if ch, ok := c.(*tg.Channel); ok && ch.AccessHash != 0 {
 				return &tg.InputPeerChannel{ChannelID: p.ChannelID, AccessHash: ch.AccessHash}, true
 			}
 		}
 		if storage != nil {
 			if ip := storage(resolve.TDLibPeerID(p)); ip != nil {
-				return ip, true
+				if ich, ok := ip.(*tg.InputPeerChannel); ok && ich.AccessHash != 0 {
+					return ip, true
+				}
+				// Non-channel storage entry is unusable for a channel peer.
 			}
 		}
 	}
 	return nil, false
 }
 
-// indexMapsByGlobalKey indexes message maps by (chat_id, id).
-func indexMapsByGlobalKey(maps []map[string]any) map[globalRichKey]map[string]any {
+// indexMapsByGlobalResponse pairs list messages (in order, skipping non-*tg.Message)
+// with collectMessages maps (same filter order) under kind-aware keys.
+// Public chat_id is not used for keying — it collides across peer kinds.
+func indexMapsByGlobalResponse(res tg.MessagesMessagesClass, maps []map[string]any) map[globalRichKey]map[string]any {
 	out := make(map[globalRichKey]map[string]any, len(maps))
-	for _, mp := range maps {
+	mi := 0
+	for _, mc := range messagesFromResponse(res) {
+		m, ok := mc.(*tg.Message)
+		if !ok {
+			continue
+		}
+		if mi >= len(maps) {
+			break
+		}
+		mp := maps[mi]
+		mi++
 		if mp == nil {
 			continue
 		}
-		id, okID := mp["id"].(int)
-		cid, okCID := mp["chat_id"].(int64)
-		if !okID || !okCID {
+		key := globalRichKeyFromPeer(m.PeerID, m.ID)
+		if key.Kind == 0 {
 			continue
 		}
-		out[globalRichKey{ChatID: cid, MsgID: id}] = mp
+		// Prefer message id from the wire message when map id mismatches.
+		if id, ok := mp["id"].(int); ok && id != m.ID {
+			// Keep wire key; still index so apply can find the map entry.
+			_ = id
+		}
+		out[key] = mp
 	}
 	return out
 }
 
 // planGlobalRichFetches lists Part rich messages present in maps, each with a
-// derived InputPeer. Keys are (chat_id, msg_id) so same IDs in different peers
-// stay distinct. Messages without a derivable peer are omitted (stay truncated).
+// derived InputPeer. Keys encode peer kind + peer id + msg id so PeerUser(1),
+// PeerChat(1), and PeerChannel(1) stay distinct. Messages without a derivable
+// peer (e.g. channel missing access hash) are omitted and stay truncated.
 func planGlobalRichFetches(res tg.MessagesMessagesClass, maps []map[string]any, storage peerStorageLookup) []globalRichPlan {
-	byKey := indexMapsByGlobalKey(maps)
+	byKey := indexMapsByGlobalResponse(res, maps)
 	if len(byKey) == 0 {
 		return nil
 	}
@@ -253,17 +309,16 @@ func planGlobalRichFetches(res tg.MessagesMessagesClass, maps []map[string]any, 
 		if !ok || !rm.Part {
 			continue
 		}
-		cid := peerID(m.PeerID)
-		key := globalRichKey{ChatID: cid, MsgID: m.ID}
-		if byKey[key] == nil {
-			// Filtered out of maps (e.g. since) — do not plan.
+		key := globalRichKeyFromPeer(m.PeerID, m.ID)
+		if key.Kind == 0 || byKey[key] == nil {
+			// Unknown peer or filtered out of maps (e.g. since) — do not plan.
 			continue
 		}
 		ip, ok := inputPeerFromSearchPeer(m.PeerID, users, chats, storage)
 		if !ok {
 			continue
 		}
-		plans = append(plans, globalRichPlan{ChatID: cid, MsgID: m.ID, Peer: ip})
+		plans = append(plans, globalRichPlan{Key: key, Peer: ip})
 	}
 	return plans
 }
@@ -272,6 +327,7 @@ func planGlobalRichFetches(res tg.MessagesMessagesClass, maps []map[string]any, 
 // each Part message is fetched with its own InputPeer. One shared richFetchBudget
 // applies to the whole invocation; first FLOOD_WAIT stops further fetches.
 // RPC failures are best-effort (inline partial + rich_truncated + warning).
+// Full-fetch bodies are matched by peer-aware key, never by message id alone.
 func autofetchGlobalRichParts(conn *client.Conn, res tg.MessagesMessagesClass, maps []map[string]any) {
 	var storage peerStorageLookup
 	if conn != nil && conn.Ctx != nil && conn.Ctx.PeerStorage != nil {
@@ -290,12 +346,12 @@ func autofetchGlobalRichParts(conn *client.Conn, res tg.MessagesMessagesClass, m
 	if len(plans) == 0 {
 		return
 	}
-	byKey := indexMapsByGlobalKey(maps)
+	byKey := indexMapsByGlobalResponse(res, maps)
 	origResolve := richResolveMap(messagesResponseUsers(res))
 	spent := 0
 	stopped := false
 	for _, plan := range plans {
-		mp := byKey[globalRichKey{ChatID: plan.ChatID, MsgID: plan.MsgID}]
+		mp := byKey[plan.Key]
 		if mp == nil {
 			continue
 		}
@@ -306,38 +362,60 @@ func autofetchGlobalRichParts(conn *client.Conn, res tg.MessagesMessagesClass, m
 		spent++
 		full, err := conn.Ctx.Raw.MessagesGetRichMessage(conn.Ctx, &tg.MessagesGetRichMessageRequest{
 			Peer: plan.Peer,
-			ID:   plan.MsgID,
+			ID:   plan.Key.MsgID,
 		})
 		if err != nil {
 			mp["rich_truncated"] = true
-			output.Warnf("rich_fetch_failed", "chat %d id %d: %v", plan.ChatID, plan.MsgID, err)
+			output.Warnf("rich_fetch_failed", "peer kind %d id %d msg %d: %v",
+				plan.Key.Kind, plan.Key.PeerID, plan.Key.MsgID, err)
 			if isFloodWait(err) {
 				stopped = true
 			}
 			continue
 		}
-		if rm := fullRichMessage(full, plan.MsgID); rm != nil {
+		if rm := fullRichMessageForKey(full, plan.Key); rm != nil {
 			// Prefer plain from the full message; fall back to the list response
-			// keyed by peer+id (message IDs alone are not unique in global search).
-			plain := messagePlainByID(full, plan.MsgID)
+			// with the same peer-aware key.
+			plain := messagePlainForKey(full, plan.Key)
 			if plain == "" {
-				plain = messagePlainByPeerAndID(res, plan.ChatID, plan.MsgID)
+				plain = messagePlainForKey(res, plan.Key)
 			}
 			resolve := mergeRichResolve(origResolve, richResolveMap(messagesResponseUsers(full)))
 			applyFetchedRichRender(mp, plain, *rm, resolve)
+		} else {
+			// Unexpected/wrong peer in fetch response — keep inline truncated body.
+			mp["rich_truncated"] = true
 		}
 	}
 }
 
-// messagePlainByPeerAndID returns m.Message for the *tg.Message with matching
-// peerID-form chat id and message id (global-search safe).
-func messagePlainByPeerAndID(res tg.MessagesMessagesClass, chatID int64, id int) string {
+// fullRichMessageForKey finds the message matching key (peer kind + peer id +
+// msg id) in a getRichMessage response and returns its RichMessage. Same-ID
+// bodies from a different peer are rejected.
+func fullRichMessageForKey(res tg.MessagesMessagesClass, key globalRichKey) *tg.RichMessage {
 	for _, mc := range messagesFromResponse(res) {
 		m, ok := mc.(*tg.Message)
-		if !ok || m.ID != id {
+		if !ok || m.ID != key.MsgID {
 			continue
 		}
-		if peerID(m.PeerID) == chatID {
+		if !peerMatchesGlobalKey(m.PeerID, key) {
+			continue
+		}
+		if rm, ok := m.GetRichMessage(); ok {
+			return &rm
+		}
+	}
+	return nil
+}
+
+// messagePlainForKey returns m.Message for the *tg.Message matching key.
+func messagePlainForKey(res tg.MessagesMessagesClass, key globalRichKey) string {
+	for _, mc := range messagesFromResponse(res) {
+		m, ok := mc.(*tg.Message)
+		if !ok || m.ID != key.MsgID {
+			continue
+		}
+		if peerMatchesGlobalKey(m.PeerID, key) {
 			return m.Message
 		}
 	}
