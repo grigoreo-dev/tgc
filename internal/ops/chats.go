@@ -233,7 +233,8 @@ func SearchChats(conn *client.Conn, query string, limit int) ([]resolve.Peer, er
 }
 
 // SearchMessages performs a global message search across all chats. Each
-// result derives its own chat_id from the message peer.
+// result derives its own chat_id from the message peer. Part rich messages are
+// auto-fetched per peer (message IDs are not unique across chats).
 func SearchMessages(conn *client.Conn, query string, limit int) ([]map[string]any, error) {
 	res, err := conn.Ctx.Raw.MessagesSearchGlobal(conn.Ctx, &tg.MessagesSearchGlobalRequest{
 		Q:          query,
@@ -244,7 +245,9 @@ func SearchMessages(conn *client.Conn, query string, limit int) ([]map[string]an
 	if err != nil {
 		return nil, client.WrapErr(err)
 	}
-	return collectMessages(res, 0, time.Time{}), nil
+	maps := collectMessages(res, 0, time.Time{})
+	autofetchGlobalRichParts(conn, res, maps)
+	return maps, nil
 }
 
 func indexUsers(users []tg.UserClass) map[int64]*tg.User {

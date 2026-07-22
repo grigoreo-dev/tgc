@@ -149,6 +149,218 @@ func richPartIDs(res tg.MessagesMessagesClass) []int {
 	return ids
 }
 
+// globalRichKey identifies a message in multi-peer results (global search).
+// Message IDs alone are not unique across chats.
+type globalRichKey struct {
+	ChatID int64
+	MsgID  int
+}
+
+// globalRichPlan is one planned getRichMessage for a Part message in global search.
+type globalRichPlan struct {
+	ChatID int64
+	MsgID  int
+	Peer   tg.InputPeerClass
+}
+
+// peerStorageLookup returns a non-empty InputPeer from local peer storage by
+// TDLib-form id, or nil. Used only as a no-network fallback when the global
+// search response lacks the peer's access hash.
+type peerStorageLookup func(tdlibID int64) tg.InputPeerClass
+
+// inputPeerFromSearchPeer builds an InputPeer for a wire Peer using response
+// users/chats (preferred) or peer storage (fallback). No network resolves.
+func inputPeerFromSearchPeer(
+	peer tg.PeerClass,
+	users map[int64]*tg.User,
+	chats map[int64]tg.ChatClass,
+	storage peerStorageLookup,
+) (tg.InputPeerClass, bool) {
+	if peer == nil {
+		return nil, false
+	}
+	switch p := peer.(type) {
+	case *tg.PeerUser:
+		if u, ok := users[p.UserID]; ok {
+			return &tg.InputPeerUser{UserID: p.UserID, AccessHash: u.AccessHash}, true
+		}
+		if storage != nil {
+			if ip := storage(p.UserID); ip != nil {
+				return ip, true
+			}
+		}
+	case *tg.PeerChat:
+		// Basic groups need no access hash.
+		if _, ok := chats[p.ChatID]; ok {
+			return &tg.InputPeerChat{ChatID: p.ChatID}, true
+		}
+		// Response may omit the chat object; InputPeerChat still works with plain id.
+		if storage != nil {
+			if ip := storage(resolve.TDLibPeerID(p)); ip != nil {
+				return ip, true
+			}
+		}
+		return &tg.InputPeerChat{ChatID: p.ChatID}, true
+	case *tg.PeerChannel:
+		if c, ok := chats[p.ChannelID]; ok {
+			if ch, ok := c.(*tg.Channel); ok {
+				return &tg.InputPeerChannel{ChannelID: p.ChannelID, AccessHash: ch.AccessHash}, true
+			}
+		}
+		if storage != nil {
+			if ip := storage(resolve.TDLibPeerID(p)); ip != nil {
+				return ip, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// indexMapsByGlobalKey indexes message maps by (chat_id, id).
+func indexMapsByGlobalKey(maps []map[string]any) map[globalRichKey]map[string]any {
+	out := make(map[globalRichKey]map[string]any, len(maps))
+	for _, mp := range maps {
+		if mp == nil {
+			continue
+		}
+		id, okID := mp["id"].(int)
+		cid, okCID := mp["chat_id"].(int64)
+		if !okID || !okCID {
+			continue
+		}
+		out[globalRichKey{ChatID: cid, MsgID: id}] = mp
+	}
+	return out
+}
+
+// planGlobalRichFetches lists Part rich messages present in maps, each with a
+// derived InputPeer. Keys are (chat_id, msg_id) so same IDs in different peers
+// stay distinct. Messages without a derivable peer are omitted (stay truncated).
+func planGlobalRichFetches(res tg.MessagesMessagesClass, maps []map[string]any, storage peerStorageLookup) []globalRichPlan {
+	byKey := indexMapsByGlobalKey(maps)
+	if len(byKey) == 0 {
+		return nil
+	}
+	users := messagesResponseUsers(res)
+	chats := messagesResponseChats(res)
+	var plans []globalRichPlan
+	for _, mc := range messagesFromResponse(res) {
+		m, ok := mc.(*tg.Message)
+		if !ok {
+			continue
+		}
+		rm, ok := m.GetRichMessage()
+		if !ok || !rm.Part {
+			continue
+		}
+		cid := peerID(m.PeerID)
+		key := globalRichKey{ChatID: cid, MsgID: m.ID}
+		if byKey[key] == nil {
+			// Filtered out of maps (e.g. since) — do not plan.
+			continue
+		}
+		ip, ok := inputPeerFromSearchPeer(m.PeerID, users, chats, storage)
+		if !ok {
+			continue
+		}
+		plans = append(plans, globalRichPlan{ChatID: cid, MsgID: m.ID, Peer: ip})
+	}
+	return plans
+}
+
+// autofetchGlobalRichParts is the multi-peer counterpart of autofetchRichParts:
+// each Part message is fetched with its own InputPeer. One shared richFetchBudget
+// applies to the whole invocation; first FLOOD_WAIT stops further fetches.
+// RPC failures are best-effort (inline partial + rich_truncated + warning).
+func autofetchGlobalRichParts(conn *client.Conn, res tg.MessagesMessagesClass, maps []map[string]any) {
+	var storage peerStorageLookup
+	if conn != nil && conn.Ctx != nil && conn.Ctx.PeerStorage != nil {
+		storage = func(tdlibID int64) tg.InputPeerClass {
+			ip := conn.Ctx.PeerStorage.GetInputPeerById(tdlibID)
+			if ip == nil {
+				return nil
+			}
+			if _, empty := ip.(*tg.InputPeerEmpty); empty {
+				return nil
+			}
+			return ip
+		}
+	}
+	plans := planGlobalRichFetches(res, maps, storage)
+	if len(plans) == 0 {
+		return
+	}
+	byKey := indexMapsByGlobalKey(maps)
+	origResolve := richResolveMap(messagesResponseUsers(res))
+	spent := 0
+	stopped := false
+	for _, plan := range plans {
+		mp := byKey[globalRichKey{ChatID: plan.ChatID, MsgID: plan.MsgID}]
+		if mp == nil {
+			continue
+		}
+		if stopped || spent >= richFetchBudget {
+			mp["rich_truncated"] = true
+			continue
+		}
+		spent++
+		full, err := conn.Ctx.Raw.MessagesGetRichMessage(conn.Ctx, &tg.MessagesGetRichMessageRequest{
+			Peer: plan.Peer,
+			ID:   plan.MsgID,
+		})
+		if err != nil {
+			mp["rich_truncated"] = true
+			output.Warnf("rich_fetch_failed", "chat %d id %d: %v", plan.ChatID, plan.MsgID, err)
+			if isFloodWait(err) {
+				stopped = true
+			}
+			continue
+		}
+		if rm := fullRichMessage(full, plan.MsgID); rm != nil {
+			// Prefer plain from the full message; fall back to the list response
+			// keyed by peer+id (message IDs alone are not unique in global search).
+			plain := messagePlainByID(full, plan.MsgID)
+			if plain == "" {
+				plain = messagePlainByPeerAndID(res, plan.ChatID, plan.MsgID)
+			}
+			resolve := mergeRichResolve(origResolve, richResolveMap(messagesResponseUsers(full)))
+			applyFetchedRichRender(mp, plain, *rm, resolve)
+		}
+	}
+}
+
+// messagePlainByPeerAndID returns m.Message for the *tg.Message with matching
+// peerID-form chat id and message id (global-search safe).
+func messagePlainByPeerAndID(res tg.MessagesMessagesClass, chatID int64, id int) string {
+	for _, mc := range messagesFromResponse(res) {
+		m, ok := mc.(*tg.Message)
+		if !ok || m.ID != id {
+			continue
+		}
+		if peerID(m.PeerID) == chatID {
+			return m.Message
+		}
+	}
+	return ""
+}
+
+// messagesResponseChats indexes Chat/Channel objects from a messages response
+// by plain wire id (Chat.ID / Channel.ID).
+func messagesResponseChats(res tg.MessagesMessagesClass) map[int64]tg.ChatClass {
+	var chats []tg.ChatClass
+	switch r := res.(type) {
+	case *tg.MessagesMessages:
+		chats = r.Chats
+	case *tg.MessagesMessagesSlice:
+		chats = r.Chats
+	case *tg.MessagesChannelMessages:
+		chats = r.Chats
+	default:
+		return nil
+	}
+	return indexChats(chats)
+}
+
 // autofetchRichParts re-renders truncated (Part) rich messages by fetching the
 // full version via messages.getRichMessage, bounded by richFetchBudget and a
 // stop-on-FLOOD_WAIT rule. It mutates maps in place (matched by "id").
