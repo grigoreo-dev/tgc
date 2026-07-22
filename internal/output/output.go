@@ -151,3 +151,11 @@ func Warnf(code, format string, a ...any) {
 	line, _ := json.Marshal(map[string]any{"warning": code, "message": fmt.Sprintf(format, a...)})
 	fmt.Fprintln(stderr, string(line))
 }
+
+// SwapStderr replaces the package stderr writer and returns a restore func.
+// Intended for tests that assert structured warnings.
+func SwapStderr(w io.Writer) (restore func()) {
+	prev := stderr
+	stderr = w
+	return func() { stderr = prev }
+}

@@ -37,27 +37,61 @@ type localConfig struct {
 	APIHash        string `toml:"api_hash"`
 }
 
-// runInit creates ./.tgc in CWD (additive, git-init style) and returns the
-// result map. It never uses walk-up: init always targets CWD.
+// samePath reports whether a and b name the same directory after cleaning and
+// resolving symlinks (best-effort). Used so CWD via a $HOME symlink still
+// counts as "at home".
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ca, errA := filepath.EvalSymlinks(a)
+	cb, errB := filepath.EvalSymlinks(b)
+	if errA != nil {
+		ca = filepath.Clean(a)
+	}
+	if errB != nil {
+		cb = filepath.Clean(b)
+	}
+	return ca == cb
+}
+
+// runInit creates a config directory (additive, git-init style) and returns the
+// result map. When CWD is $HOME, walk-up discovery will never pick up ~/.tgc,
+// so init targets the global config dir instead. Otherwise it always targets
+// CWD/.tgc (never uses walk-up for the target).
 func runInit(profile string) (map[string]any, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return nil, output.Errf("io_error", "cannot determine working directory: %v", err)
 	}
+
+	home, _ := os.UserHomeDir()
+	scope := "local"
 	tgcDir := filepath.Join(wd, ".tgc")
+	if samePath(wd, home) {
+		scope = "global"
+		tgcDir = config.GlobalDir()
+		output.Warnf("init_home_global",
+			"cwd is $HOME; walk-up never treats ~/.tgc as local, so init uses global config dir %s", tgcDir)
+	}
+
 	if err := os.MkdirAll(tgcDir, 0o700); err != nil {
 		return nil, output.Errf("io_error", "cannot create %s: %v", tgcDir, err)
 	}
 
-	// .gitignore = * (create if missing; do not clobber an existing one)
-	giPath := filepath.Join(tgcDir, ".gitignore")
-	if _, err := os.Stat(giPath); os.IsNotExist(err) {
-		if err := os.WriteFile(giPath, []byte("*\n"), 0o600); err != nil {
-			return nil, output.Errf("io_error", "cannot write %s: %v", giPath, err)
+	// .gitignore = * for local project dirs only (create if missing; do not
+	// clobber). Skip for the machine-global config dir — it is not a git-ignored
+	// project directory.
+	if scope == "local" {
+		giPath := filepath.Join(tgcDir, ".gitignore")
+		if _, err := os.Stat(giPath); os.IsNotExist(err) {
+			if err := os.WriteFile(giPath, []byte("*\n"), 0o600); err != nil {
+				return nil, output.Errf("io_error", "cannot write %s: %v", giPath, err)
+			}
 		}
 	}
 
-	// Load existing local config (if any) for additive merge.
+	// Load existing config (if any) for additive merge.
 	cfgPath := filepath.Join(tgcDir, "config.toml")
 	var lc localConfig
 	if b, err := os.ReadFile(cfgPath); err == nil {
@@ -101,9 +135,17 @@ func runInit(profile string) (map[string]any, error) {
 		return nil, output.Errf("io_error", "cannot finalize config: %v", err)
 	}
 
-	res := map[string]any{"path": tgcDir, "inherited_creds": inheritedCreds}
+	res := map[string]any{
+		"path":            tgcDir,
+		"scope":           scope,
+		"inherited_creds": inheritedCreds,
+	}
 	if !inheritedCreds {
-		res["next"] = "set TGC_API_ID/TGC_API_HASH or edit .tgc/config.toml, then run: tgc auth login"
+		if scope == "global" {
+			res["next"] = "set TGC_API_ID/TGC_API_HASH or edit config.toml, then run: tgc auth login"
+		} else {
+			res["next"] = "set TGC_API_ID/TGC_API_HASH or edit .tgc/config.toml, then run: tgc auth login"
+		}
 	}
 	return res, nil
 }
