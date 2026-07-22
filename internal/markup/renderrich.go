@@ -3,6 +3,8 @@ package markup
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gotd/td/tg"
 )
@@ -73,24 +75,38 @@ func escapeLeadingBlockMeta(ln string) string {
 
 // escapeLinkDest sanitizes a sender-controlled URL/email/phone value for use
 // inside a Markdown link destination: [label](DEST). Parentheses and backslashes
-// are escaped so they cannot close or restructure the destination; whitespace and
-// ASCII control characters are percent-encoded so they cannot inject line breaks
-// or terminate the destination early. Other characters are preserved so ordinary
-// URLs remain faithful.
+// are escaped so they cannot close or restructure the destination. Unicode
+// White_Space (incl. U+00A0, U+3000), line/paragraph separators (U+2028/U+2029),
+// and control characters (incl. DEL) are percent-encoded as UTF-8 bytes so
+// downstream Markdown consumers cannot treat them as destination-ending
+// whitespace or line breaks. Other characters (including '*') are preserved.
 func escapeLinkDest(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 8)
-	for i := 0; i < len(s); i++ {
+	for i := 0; i < len(s); {
 		c := s[i]
-		switch {
-		case c == '\\' || c == '(' || c == ')':
+		if c == '\\' || c == '(' || c == ')' {
 			b.WriteByte('\\')
 			b.WriteByte(c)
-		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c < 0x20:
-			fmt.Fprintf(&b, "%%%02X", c)
-		default:
-			b.WriteByte(c)
+			i++
+			continue
 		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&b, "%%%02X", c)
+			i++
+			continue
+		}
+		// Controls (C0/C1/DEL) and Unicode White_Space / line separators.
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			for j := 0; j < size; j++ {
+				fmt.Fprintf(&b, "%%%02X", s[i+j])
+			}
+			i += size
+			continue
+		}
+		b.WriteString(s[i : i+size])
+		i += size
 	}
 	return b.String()
 }
@@ -102,13 +118,24 @@ func escapeMathSource(s string) string {
 	return strings.ReplaceAll(s, "$", `\$`)
 }
 
-// escapeInlineMathSource is escapeMathSource plus newline→space so inline $...$
-// cannot span lines and forge block structure.
+// escapeInlineMathSource collapses every Unicode White_Space / line-paragraph
+// separator rune to a single ASCII space (so inline $...$ cannot span lines),
+// then escapes '$' via escapeMathSource semantics.
 func escapeInlineMathSource(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	s = strings.ReplaceAll(s, "\n", " ")
-	return escapeMathSource(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			b.WriteByte(' ')
+			continue
+		}
+		if r == '$' {
+			b.WriteString(`\$`)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // renderRichText renders an inline RichText tree to Markdown.

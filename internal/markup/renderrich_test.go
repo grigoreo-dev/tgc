@@ -228,11 +228,47 @@ func TestEscapeLinkDest(t *testing.T) {
 		{"open-paren", "https://a.com/foo(bar)", `https://a.com/foo\(bar\)`},
 		{"crlf", "https://a.com\r\n]", "https://a.com%0D%0A]"},
 		{"tab", "https://a.com\tx", "https://a.com%09x"},
+		// Unicode White_Space / line-paragraph separators must be percent-encoded
+		// (UTF-8 bytes), not left raw for downstream MD consumers.
+		{"nbsp-u00a0", "https://a.com\u00A0x", "https://a.com%C2%A0x"},
+		{"line-sep-u2028", "https://a.com\u2028x", "https://a.com%E2%80%A8x"},
+		{"para-sep-u2029", "https://a.com\u2029x", "https://a.com%E2%80%A9x"},
+		{"ideographic-space-u3000", "https://a.com\u3000x", "https://a.com%E3%80%80x"},
+		{"del-control", "https://a.com\x7Fx", "https://a.com%7Fx"},
+		// '*' remains literal in destinations (accepted non-breakout).
+		{"asterisk-literal", "https://a.com/*path*", "https://a.com/*path*"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := escapeLinkDest(tc.in); got != tc.want {
 				t.Fatalf("escapeLinkDest(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEscapeInlineMathSourceUnicodeSeparators(t *testing.T) {
+	// Inline math must collapse Unicode line/paragraph separators and Unicode
+	// whitespace to ASCII space so $...$ cannot split across lines.
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// Each White_Space / separator rune becomes one ASCII space (no collapse).
+		{"crlf", "a\r\nb", "a  b"},
+		{"lf", "a\nb", "a b"},
+		{"line-sep-u2028", "a\u2028b", "a b"},
+		{"para-sep-u2029", "a\u2029b", "a b"},
+		{"nbsp-u00a0", "a\u00A0b", "a b"},
+		{"ideographic-space-u3000", "a\u3000b", "a b"},
+		{"dollar-and-ls", "x$\u2028**y**", `x\$ **y**`},
+		{"ordinary", "E=mc^2", "E=mc^2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := escapeInlineMathSource(tc.in); got != tc.want {
+				t.Fatalf("escapeInlineMathSource(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
