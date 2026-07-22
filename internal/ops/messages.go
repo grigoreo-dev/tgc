@@ -83,6 +83,7 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 		}
 		maps := collectMessages(res, peer.ID, sinceT)
 		autofetchRichParts(conn, ip, res, maps)
+		stripRichMapKeys(maps)
 		return maps, nil
 	default:
 		req := &tg.MessagesGetHistoryRequest{Peer: ip, Limit: o.Limit}
@@ -106,6 +107,7 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 		}
 		maps := collectMessages(res, peer.ID, sinceT)
 		autofetchRichParts(conn, ip, res, maps)
+		stripRichMapKeys(maps)
 		return maps, nil
 	}
 }
@@ -131,6 +133,7 @@ func Context(conn *client.Conn, selector string, msgID, radius int) ([]map[strin
 	}
 	maps := collectMessages(res, peer.ID, time.Time{})
 	autofetchRichParts(conn, ip, res, maps)
+	stripRichMapKeys(maps)
 	return maps, nil
 }
 
@@ -255,45 +258,45 @@ func inputPeerFromSearchPeer(
 	return nil, false
 }
 
-// indexMapsByGlobalResponse pairs list messages (in order, skipping non-*tg.Message)
-// with collectMessages maps (same filter order) under kind-aware keys.
-// Public chat_id is not used for keying — it collides across peer kinds.
-func indexMapsByGlobalResponse(res tg.MessagesMessagesClass, maps []map[string]any) map[globalRichKey]map[string]any {
+// richMapKeyField is an unexported map key carrying globalRichKey for
+// filter-safe indexing. It is stripped before any public JSON output.
+const richMapKeyField = "_rich_global_key"
+
+// indexMapsByGlobalKey indexes maps by the type-safe key attached at collection
+// time. It does not walk the API response positionally, so since-filters and
+// service skips cannot mis-pair a plan with the wrong map row.
+func indexMapsByGlobalKey(maps []map[string]any) map[globalRichKey]map[string]any {
 	out := make(map[globalRichKey]map[string]any, len(maps))
-	mi := 0
-	for _, mc := range messagesFromResponse(res) {
-		m, ok := mc.(*tg.Message)
-		if !ok {
-			continue
-		}
-		if mi >= len(maps) {
-			break
-		}
-		mp := maps[mi]
-		mi++
+	for _, mp := range maps {
 		if mp == nil {
 			continue
 		}
-		key := globalRichKeyFromPeer(m.PeerID, m.ID)
-		if key.Kind == 0 {
+		key, ok := mp[richMapKeyField].(globalRichKey)
+		if !ok || key.Kind == 0 {
 			continue
-		}
-		// Prefer message id from the wire message when map id mismatches.
-		if id, ok := mp["id"].(int); ok && id != m.ID {
-			// Keep wire key; still index so apply can find the map entry.
-			_ = id
 		}
 		out[key] = mp
 	}
 	return out
 }
 
+// stripRichMapKeys removes internal rich-index metadata so public message maps
+// keep the historical field contract (no internal keys in JSON).
+func stripRichMapKeys(maps []map[string]any) {
+	for _, mp := range maps {
+		if mp != nil {
+			delete(mp, richMapKeyField)
+		}
+	}
+}
+
 // planGlobalRichFetches lists Part rich messages present in maps, each with a
 // derived InputPeer. Keys encode peer kind + peer id + msg id so PeerUser(1),
 // PeerChat(1), and PeerChannel(1) stay distinct. Messages without a derivable
-// peer (e.g. channel missing access hash) are omitted and stay truncated.
+// peer (e.g. channel missing access hash) or absent from maps (e.g. since
+// filtered) are omitted and stay truncated.
 func planGlobalRichFetches(res tg.MessagesMessagesClass, maps []map[string]any, storage peerStorageLookup) []globalRichPlan {
-	byKey := indexMapsByGlobalResponse(res, maps)
+	byKey := indexMapsByGlobalKey(maps)
 	if len(byKey) == 0 {
 		return nil
 	}
@@ -328,6 +331,7 @@ func planGlobalRichFetches(res tg.MessagesMessagesClass, maps []map[string]any, 
 // applies to the whole invocation; first FLOOD_WAIT stops further fetches.
 // RPC failures are best-effort (inline partial + rich_truncated + warning).
 // Full-fetch bodies are matched by peer-aware key, never by message id alone.
+// Map rows are located via keys attached at collect time (not positional).
 func autofetchGlobalRichParts(conn *client.Conn, res tg.MessagesMessagesClass, maps []map[string]any) {
 	var storage peerStorageLookup
 	if conn != nil && conn.Ctx != nil && conn.Ctx.PeerStorage != nil {
@@ -346,7 +350,7 @@ func autofetchGlobalRichParts(conn *client.Conn, res tg.MessagesMessagesClass, m
 	if len(plans) == 0 {
 		return
 	}
-	byKey := indexMapsByGlobalResponse(res, maps)
+	byKey := indexMapsByGlobalKey(maps)
 	origResolve := richResolveMap(messagesResponseUsers(res))
 	spent := 0
 	stopped := false
@@ -636,7 +640,13 @@ func collectMessages(res tg.MessagesMessagesClass, chatID int64, since time.Time
 		if cid == 0 {
 			cid = peerID(m.PeerID)
 		}
-		out = append(out, messageToMap(m, userIdx, chatIdx, cid))
+		mp := messageToMap(m, userIdx, chatIdx, cid)
+		// Attach type-safe multi-peer key for filter-safe rich indexing.
+		// Stripped before public return (SearchMessages/Read/Context).
+		if key := globalRichKeyFromPeer(m.PeerID, m.ID); key.Kind != 0 {
+			mp[richMapKeyField] = key
+		}
+		out = append(out, mp)
 	}
 	return out
 }

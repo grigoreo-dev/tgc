@@ -247,6 +247,7 @@ func SearchMessages(conn *client.Conn, query string, limit int) ([]map[string]an
 	}
 	maps := collectMessages(res, 0, time.Time{})
 	autofetchGlobalRichParts(conn, res, maps)
+	stripRichMapKeys(maps)
 	return maps, nil
 }
 

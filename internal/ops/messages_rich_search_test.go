@@ -90,7 +90,7 @@ func TestPlanGlobalRichFetchesDistinctPeerKindsSameNumericID(t *testing.T) {
 	if len(plans) != 3 {
 		t.Fatalf("plans = %d, want 3 distinct peer kinds", len(plans))
 	}
-	byKey := indexMapsByGlobalResponse(res, maps)
+	byKey := indexMapsByGlobalKey(maps)
 	if len(byKey) != 3 {
 		t.Fatalf("index size = %d, want 3 (kinds must not collide)", len(byKey))
 	}
@@ -265,6 +265,82 @@ func TestPlanGlobalRichFetchesOnlyPart(t *testing.T) {
 	}
 }
 
+// An early message dropped by since must not steal the Part row's map index.
+// Positional pairing would bind the remaining Part plan to the wrong map (or
+// leave it mis-keyed); key-attached indexing keeps the Part on its own row.
+func TestIndexMapsSafeWhenSinceFiltersEarlyMessage(t *testing.T) {
+	u := &tg.User{ID: 7, AccessHash: 70}
+	// Old plain message (filtered by since) then a newer Part rich message.
+	old := &tg.Message{
+		ID:      1,
+		Message: "old",
+		Date:    int(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).Unix()),
+		PeerID:  &tg.PeerUser{UserID: 7},
+	}
+	part := partRich(2, &tg.PeerUser{UserID: 7}, "keep-plain")
+	part.Date = int(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC).Unix())
+	res := &tg.MessagesMessages{
+		Messages: []tg.MessageClass{old, part},
+		Users:    []tg.UserClass{u},
+	}
+	since := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	maps := collectMessages(res, 0, since)
+	if len(maps) != 1 {
+		t.Fatalf("maps len = %d, want 1 after since filter", len(maps))
+	}
+	if maps[0]["id"] != 2 {
+		t.Fatalf("surviving map id = %v, want 2", maps[0]["id"])
+	}
+
+	want := globalRichKey{Kind: peerKindUser, PeerID: 7, MsgID: 2}
+	byKey := indexMapsByGlobalKey(maps)
+	if byKey[want] == nil || byKey[want]["id"] != 2 {
+		t.Fatalf("Part key %+v must address its own map row, got %v (index=%v)", want, byKey[want], byKey)
+	}
+	// Same underlying map: mutate via key and observe on maps[0].
+	byKey[want]["__probe"] = true
+	if maps[0]["__probe"] != true {
+		t.Fatal("index must point at the surviving collectMessages row, not a copy/mispair")
+	}
+	delete(maps[0], "__probe")
+	// Filtered-out id=1 must not appear under any key.
+	for k := range byKey {
+		if k.MsgID == 1 {
+			t.Fatalf("filtered message must not be indexed: %+v", k)
+		}
+	}
+
+	plans := planGlobalRichFetches(res, maps, nil)
+	if len(plans) != 1 || plans[0].Key != want {
+		t.Fatalf("plans = %+v, want single %+v", plans, want)
+	}
+	// Simulate full-fetch apply: only the surviving map row is rewritten.
+	full := tg.RichMessage{Blocks: fullRichBlocksText("full-body")}
+	applyFetchedRichRender(byKey[want], "keep-plain", full, nil)
+	if maps[0]["text"] != "keep-plain\n\nfull-body" {
+		t.Fatalf("applied text = %q, want keep-plain\\n\\nfull-body", maps[0]["text"])
+	}
+}
+
+// Public message maps must not expose the internal global rich key after strip.
+func TestStripRichMapKeysRemovesInternalMeta(t *testing.T) {
+	u := &tg.User{ID: 3, AccessHash: 1}
+	m := partRich(5, &tg.PeerUser{UserID: 3}, "x")
+	res := &tg.MessagesMessages{Messages: []tg.MessageClass{m}, Users: []tg.UserClass{u}}
+	maps := collectMessages(res, 0, timeZero())
+	if _, ok := maps[0][richMapKeyField]; !ok {
+		t.Fatalf("collectMessages must attach internal key for indexing")
+	}
+	stripRichMapKeys(maps)
+	if _, ok := maps[0][richMapKeyField]; ok {
+		t.Fatalf("stripRichMapKeys must remove %q from public maps", richMapKeyField)
+	}
+	// Public contract fields remain.
+	if maps[0]["id"] != 5 || maps[0]["chat_id"] != int64(3) {
+		t.Fatalf("public fields damaged: %+v", maps[0])
+	}
+}
+
 // Service messages must not shift plan/map alignment (key-matched, not positional-only).
 func TestPlanGlobalRichFetchesSkipsServiceNoMisalign(t *testing.T) {
 	u := &tg.User{ID: 5, AccessHash: 50}
@@ -283,7 +359,7 @@ func TestPlanGlobalRichFetchesSkipsServiceNoMisalign(t *testing.T) {
 	if len(plans) != 1 || plans[0].Key != want {
 		t.Fatalf("plans = %+v, want single %+v", plans, want)
 	}
-	byKey := indexMapsByGlobalResponse(res, maps)
+	byKey := indexMapsByGlobalKey(maps)
 	mp := byKey[plans[0].Key]
 	if mp == nil || mp["id"] != 11 {
 		t.Fatalf("map alignment failed: %v", mp)
@@ -294,25 +370,15 @@ func TestPlanGlobalRichFetchesSkipsServiceNoMisalign(t *testing.T) {
 // (already covered in messages_rich_test); verify peer-kind keys keep maps
 // distinct when public chat_id collides.
 func TestGlobalKeyIndexAndApplyPreservesBudgetSemantics(t *testing.T) {
-	mpA := map[string]any{"id": 1, "chat_id": int64(10), "text": "plain\n\npartial", "rich": true, "rich_truncated": true}
-	mpB := map[string]any{"id": 1, "chat_id": int64(20), "text": "plain\n\npartial", "rich": true, "rich_truncated": true}
-	u1 := &tg.User{ID: 10, AccessHash: 1}
-	u2 := &tg.User{ID: 20, AccessHash: 2}
-	res := &tg.MessagesMessages{
-		Messages: []tg.MessageClass{
-			partRich(1, &tg.PeerUser{UserID: 10}, "plain"),
-			partRich(1, &tg.PeerUser{UserID: 20}, "plain"),
-		},
-		Users: []tg.UserClass{u1, u2},
-	}
-	// Use the response-paired index (same path as autofetch).
-	byKey := indexMapsByGlobalResponse(res, []map[string]any{mpA, mpB})
+	kA := globalRichKey{Kind: peerKindUser, PeerID: 10, MsgID: 1}
+	kB := globalRichKey{Kind: peerKindUser, PeerID: 20, MsgID: 1}
+	mpA := map[string]any{"id": 1, "chat_id": int64(10), "text": "plain\n\npartial", "rich": true, "rich_truncated": true, richMapKeyField: kA}
+	mpB := map[string]any{"id": 1, "chat_id": int64(20), "text": "plain\n\npartial", "rich": true, "rich_truncated": true, richMapKeyField: kB}
+	byKey := indexMapsByGlobalKey([]map[string]any{mpA, mpB})
 	if len(byKey) != 2 {
 		t.Fatalf("index size = %d, want 2", len(byKey))
 	}
 	full := tg.RichMessage{Blocks: fullRichBlocks()}
-	kA := globalRichKey{Kind: peerKindUser, PeerID: 10, MsgID: 1}
-	kB := globalRichKey{Kind: peerKindUser, PeerID: 20, MsgID: 1}
 	// Apply only to peer 10; peer 20 stays truncated (simulates budget exhaustion path).
 	applyFetchedRichRender(byKey[kA], "plain", full, nil)
 	if mpA["text"] != "plain\n\nfull" {
@@ -327,7 +393,6 @@ func TestGlobalKeyIndexAndApplyPreservesBudgetSemantics(t *testing.T) {
 	if mpB["text"] != "plain\n\npartial" {
 		t.Fatalf("peer 20 text must stay partial, got %q", mpB["text"])
 	}
-	_ = kB
 }
 
 // full-fetch matching is peer-aware: a same-ID rich body from the wrong peer
