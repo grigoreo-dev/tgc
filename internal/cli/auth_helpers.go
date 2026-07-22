@@ -4,8 +4,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/grigoreo-dev/tgc/internal/output"
 	"github.com/gotd/td/tg"
+	"github.com/grigoreo-dev/tgc/internal/output"
 )
 
 // readSessionInput loads a session string from args[0] (file path), TGC_SESSION, or stdin.

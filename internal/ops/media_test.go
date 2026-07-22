@@ -13,12 +13,12 @@ func TestSanitizeName(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{"report.pdf", "report.pdf"},              // ordinary name kept
-		{"../../etc/passwd", "passwd"},            // strip traversal, keep base
-		{"/abs/path/x", "x"},                      // strip absolute prefix
-		{"..", fallback},                          // dot-dot alone → fallback
-		{".", fallback},                           // dot alone → fallback
-		{"", fallback},                            // empty → fallback
+		{"report.pdf", "report.pdf"},   // ordinary name kept
+		{"../../etc/passwd", "passwd"}, // strip traversal, keep base
+		{"/abs/path/x", "x"},           // strip absolute prefix
+		{"..", fallback},               // dot-dot alone → fallback
+		{".", fallback},                // dot alone → fallback
+		{"", fallback},                 // empty → fallback
 		{"../../../../home/user/.ssh/authorized_keys", "authorized_keys"},
 	}
 	for _, c := range cases {
