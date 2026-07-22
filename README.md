@@ -102,7 +102,7 @@ flags.
 |---------|---------|
 | `auth`     | Manage Telegram sessions (login, list, export, import, logout). |
 | `chats`    | List dialogs (cached 5m; `--fresh` to refresh). |
-| `info`     | Show a chat or user card. |
+| `info`     | Show a chat or user card (id, type, title; username, phone, about, members_count, bot, premium when set). |
 | `members`  | List the members of a group. |
 | `search`   | Search chats and contacts; `--messages` for global message search. |
 | `read`     | Read chat history, newest first. |

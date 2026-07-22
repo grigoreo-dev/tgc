@@ -59,15 +59,7 @@ func Info(conn *client.Conn, selector string) (map[string]any, error) {
 			if !ok || user.ID != p.ID {
 				continue
 			}
-			if user.Bot {
-				card["bot"] = true
-			}
-			if user.Premium {
-				card["premium"] = true
-			}
-			if phone, ok := user.GetPhone(); ok && phone != "" {
-				card["phone"] = phone
-			}
+			applyUserInfoCard(card, user)
 		}
 	case "channel":
 		if err := fillChannelInfo(conn, p, card); err != nil {
@@ -83,6 +75,23 @@ func Info(conn *client.Conn, selector string) (map[string]any, error) {
 		}
 	}
 	return card, nil
+}
+
+// applyUserInfoCard projects user flags onto an info card. Pure: no network.
+// Emits bot/premium only when true; phone only when non-empty.
+func applyUserInfoCard(card map[string]any, user *tg.User) {
+	if user == nil || card == nil {
+		return
+	}
+	if user.Bot {
+		card["bot"] = true
+	}
+	if user.Premium {
+		card["premium"] = true
+	}
+	if phone, ok := user.GetPhone(); ok && phone != "" {
+		card["phone"] = phone
+	}
 }
 
 func fillChannelInfo(conn *client.Conn, p *resolve.Peer, card map[string]any) error {
