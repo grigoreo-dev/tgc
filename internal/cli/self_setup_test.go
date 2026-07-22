@@ -195,6 +195,134 @@ func TestCompletionGenerator_IsSetupGenerator(t *testing.T) {
 	}
 }
 
+// TestSelfSetup_AfterRemoveInstallsAgain is the I1 regression: package-level
+// flag vars stuck at --remove=true would make a subsequent Execute without
+// --remove still call Remove instead of Run.
+func TestSelfSetup_AfterRemoveInstallsAgain(t *testing.T) {
+	t.Setenv("TGC_NO_UPDATE_CHECK", "1")
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	if err := execSelfSetup(t, "--shell", "bash"); err != nil {
+		t.Fatalf("initial setup: %v", err)
+	}
+	if err := execSelfSetup(t, "--shell", "bash", "--remove"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	comp := filepath.Join(home, ".local", "share", "bash-completion", "completions", "tgc")
+	if _, err := os.Stat(comp); !os.IsNotExist(err) {
+		t.Fatalf("precondition: completion should be gone after remove, stat=%v", err)
+	}
+
+	// Re-install WITHOUT --remove. Sticky package flag would wrongly remove again.
+	var stdout bytes.Buffer
+	restoreOut := output.SwapStdout(&stdout)
+	restoreErr := output.SwapStderr(&bytes.Buffer{})
+	t.Cleanup(func() {
+		restoreOut()
+		restoreErr()
+	})
+
+	rootCmd.SetArgs([]string{"self", "setup", "--shell", "bash"})
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("re-setup after remove: %v", err)
+	}
+
+	var res setup.Result
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &res); err != nil {
+		t.Fatalf("json: %v (%q)", err, stdout.String())
+	}
+	if !res.CompletionInstalled {
+		t.Fatalf("want install path (completion_installed=true), got %+v", res)
+	}
+	if len(res.Changed) == 0 {
+		t.Fatalf("re-setup must change files, got empty changed: %+v", res)
+	}
+	if _, err := os.Stat(comp); err != nil {
+		t.Fatalf("completion must exist after re-setup: %v", err)
+	}
+}
+
+// TestSelfSetup_SkippedWarnsStderr covers M1: unmarked managed targets left
+// intact surface as setup_skipped on stderr (Result.Skipped non-empty).
+func TestSelfSetup_SkippedWarnsStderr(t *testing.T) {
+	t.Setenv("TGC_NO_UPDATE_CHECK", "1")
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("SHELL", "/usr/bin/fish")
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	// Pre-create unmarked completion so Run skips it.
+	comp := filepath.Join(home, ".config", "fish", "completions", "tgc.fish")
+	if err := os.MkdirAll(filepath.Dir(comp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(comp, []byte("# user-owned completion\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	restoreOut := output.SwapStdout(&stdout)
+	restoreErr := output.SwapStderr(&stderr)
+	t.Cleanup(func() {
+		restoreOut()
+		restoreErr()
+	})
+
+	rootCmd.SetArgs([]string{"self", "setup", "--shell", "fish"})
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	warn := stderr.String()
+	if !strings.Contains(warn, `"setup_skipped"`) {
+		t.Fatalf("stderr missing setup_skipped warning: %q", warn)
+	}
+	if !strings.Contains(warn, comp) {
+		t.Fatalf("stderr warning should name skipped path %s: %q", comp, warn)
+	}
+
+	var res setup.Result
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &res); err != nil {
+		t.Fatalf("json: %v (%q)", err, stdout.String())
+	}
+	if len(res.Skipped) == 0 {
+		t.Fatalf("Result.Skipped want non-empty, got %+v", res)
+	}
+	// Unmarked user file must be left intact.
+	body, err := os.ReadFile(comp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "# user-owned completion\n" {
+		t.Fatalf("unmarked completion rewritten: %q", body)
+	}
+}
+
 // execSelfSetup runs tgc self setup with given extra args, discarding Emit output.
 func execSelfSetup(t *testing.T, args ...string) error {
 	t.Helper()

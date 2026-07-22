@@ -43,7 +43,8 @@ func writeCompletionScript(shell string, w io.Writer) error {
 }
 
 // completionGenerator returns a setup.Generator backed by Cobra completion
-// generation on rootCmd. Exported for reuse by self update (Task 4).
+// generation on rootCmd. Package-local; Task 4 reuses it from this package
+// when wiring the self-update refresh hook (selfupdate stays free of cobra/cli).
 func completionGenerator() setup.Generator {
 	return func(shell string, w io.Writer) error {
 		return writeCompletionScript(shell, w)

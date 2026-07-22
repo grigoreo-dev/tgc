@@ -10,14 +10,10 @@ import (
 	"github.com/grigoreo-dev/tgc/internal/selfupdate"
 	"github.com/grigoreo-dev/tgc/internal/setup"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var selfRefreshCache bool
-
-var (
-	selfSetupShell  string
-	selfSetupRemove bool
-)
 
 var selfCmd = &cobra.Command{
 	Use:   "self",
@@ -79,8 +75,30 @@ updates only the managed marker block / marked completion files.
 Use --remove to reverse setup (managed block and marked files only).`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSelfSetup(selfSetupShell, selfSetupRemove)
+		// pflag keeps parsed values across rootCmd.Execute in the same process
+		// (tests / rare reuse). Reset to defaults after this run so a later
+		// Execute without --remove does not inherit sticky state.
+		defer resetCommandFlags(cmd)
+
+		shell, err := cmd.Flags().GetString("shell")
+		if err != nil {
+			return err
+		}
+		remove, err := cmd.Flags().GetBool("remove")
+		if err != nil {
+			return err
+		}
+		return runSelfSetup(shell, remove)
 	},
+}
+
+// resetCommandFlags restores every flag on cmd to its default and clears Changed.
+// Needed because pflag does not reset values between Parse calls on a reused command tree.
+func resetCommandFlags(cmd *cobra.Command) {
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		_ = f.Value.Set(f.DefValue)
+		f.Changed = false
+	})
 }
 
 // runSelfSetup wires real process environment into setup.Run / setup.Remove.
@@ -137,8 +155,8 @@ func init() {
 	selfCheckCmd.Flags().BoolVar(&selfRefreshCache, "refresh-cache", false, "internal: refresh the update cache silently")
 	_ = selfCheckCmd.Flags().MarkHidden("refresh-cache")
 
-	selfSetupCmd.Flags().StringVar(&selfSetupShell, "shell", "", "shell to configure (bash|zsh|fish); default: basename of $SHELL")
-	selfSetupCmd.Flags().BoolVar(&selfSetupRemove, "remove", false, "remove managed PATH block and marked completion files")
+	selfSetupCmd.Flags().String("shell", "", "shell to configure (bash|zsh|fish); default: basename of $SHELL")
+	selfSetupCmd.Flags().Bool("remove", false, "remove managed PATH block and marked completion files")
 
 	selfCmd.AddCommand(selfCheckCmd, selfUpdateCmd, selfSetupCmd)
 	rootCmd.AddCommand(selfCmd)
