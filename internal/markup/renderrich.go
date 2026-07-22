@@ -75,11 +75,13 @@ func escapeLeadingBlockMeta(ln string) string {
 
 // escapeLinkDest sanitizes a sender-controlled URL/email/phone value for use
 // inside a Markdown link destination: [label](DEST). Parentheses and backslashes
-// are escaped so they cannot close or restructure the destination. Unicode
-// White_Space (incl. U+00A0, U+3000), line/paragraph separators (U+2028/U+2029),
-// and control characters (incl. DEL) are percent-encoded as UTF-8 bytes so
-// downstream Markdown consumers cannot treat them as destination-ending
-// whitespace or line breaks. Other characters (including '*') are preserved.
+// are escaped so they cannot close or restructure the destination. Literal '%'
+// is encoded as %25 so sender percent-sequences cannot be confused with our
+// own percent-encoding of whitespace/controls. Unicode White_Space (incl.
+// U+00A0, U+3000), line/paragraph separators (U+2028/U+2029), and control
+// characters (incl. DEL) are percent-encoded as UTF-8 bytes so downstream
+// Markdown consumers cannot treat them as destination-ending whitespace or
+// line breaks. Other characters (including '*') are preserved.
 func escapeLinkDest(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 8)
@@ -88,6 +90,12 @@ func escapeLinkDest(s string) string {
 		if c == '\\' || c == '(' || c == ')' {
 			b.WriteByte('\\')
 			b.WriteByte(c)
+			i++
+			continue
+		}
+		// Encode literal '%' so "%0A" (sender text) ≠ "%0A" (our newline encoding).
+		if c == '%' {
+			b.WriteString("%25")
 			i++
 			continue
 		}
@@ -112,28 +120,60 @@ func escapeLinkDest(s string) string {
 }
 
 // escapeMathSource sanitizes a sender-controlled math expression for use inside
-// $...$ or $$...$$ fences. Only '$' is escaped so the fence cannot be closed
-// early; other characters (including LaTeX backslashes) are preserved.
+// $...$ or $$...$$ fences under a parser-independent emitted invariant:
+//
+//  1. Every source '$' is emitted with an odd number of consecutive backslashes
+//     immediately before it (so escape-processing consumers treat that '$' as
+//     escaped). When the sender already provided an odd run, no extra '\' is
+//     added — blind ReplaceAll("$", "\\$") would turn "\$" into "\\$" and
+//     re-open the dollar.
+//  2. The escaped body never ends with an odd trailing backslash run, so the
+//     renderer-added closing fence '$' cannot be escape-neutralized.
+//
+// Ordinary LaTeX backslash commands (no '$', no odd trailing '\') are preserved.
 func escapeMathSource(s string) string {
-	return strings.ReplaceAll(s, "$", `\$`)
+	return escapeMathBody(s, false)
 }
 
 // escapeInlineMathSource collapses every Unicode White_Space / line-paragraph
 // separator rune to a single ASCII space (so inline $...$ cannot span lines),
-// then escapes '$' via escapeMathSource semantics.
+// then applies the same math-body invariant as escapeMathSource.
 func escapeInlineMathSource(s string) string {
+	return escapeMathBody(s, true)
+}
+
+// escapeMathBody walks s once, optionally collapsing White_Space, and enforces
+// the dollar/trailing-backslash invariant used by both inline and block math.
+func escapeMathBody(s string, collapseSpace bool) string {
 	var b strings.Builder
-	b.Grow(len(s))
+	b.Grow(len(s) + 8)
+	bs := 0 // consecutive backslashes just written
 	for _, r := range s {
-		if unicode.IsSpace(r) {
+		if collapseSpace && unicode.IsSpace(r) {
 			b.WriteByte(' ')
+			bs = 0
+			continue
+		}
+		if r == '\\' {
+			b.WriteByte('\\')
+			bs++
 			continue
 		}
 		if r == '$' {
-			b.WriteString(`\$`)
+			// Need an odd backslash run before '$'. Pad only when current run is even.
+			if bs%2 == 0 {
+				b.WriteByte('\\')
+			}
+			b.WriteByte('$')
+			bs = 0
 			continue
 		}
 		b.WriteRune(r)
+		bs = 0
+	}
+	// Pad trailing odd backslash run so the renderer-added closing fence is safe.
+	if bs%2 == 1 {
+		b.WriteByte('\\')
 	}
 	return b.String()
 }

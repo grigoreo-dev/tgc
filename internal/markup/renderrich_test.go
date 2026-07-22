@@ -276,6 +276,11 @@ func TestEscapeLinkDest(t *testing.T) {
 		{"del-control", "https://a.com\x7Fx", "https://a.com%7Fx"},
 		// '*' remains literal in destinations (accepted non-breakout).
 		{"asterisk-literal", "https://a.com/*path*", "https://a.com/*path*"},
+		// Literal '%' is encoded so sender "%0A" cannot be confused with our
+		// percent-encoding of a real newline (unambiguous sanitizer output).
+		{"percent-literal-0a", "https://a.com/%0A", "https://a.com/%250A"},
+		{"percent-ordinary-look", "https://a.com/a%2Fb", "https://a.com/a%252Fb"},
+		{"real-newline-still-0a", "https://a.com\nx", "https://a.com%0Ax"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -427,6 +432,120 @@ func TestRenderUntrustedMathBlockNoBreakout(t *testing.T) {
 				t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
 			}
 		})
+	}
+}
+
+// tgc-fl8.1: parser-independent math-source invariant.
+//
+// Emitted body (inside renderer $...$ / $$...$$) must satisfy:
+//  1. Every source '$' is preceded by an ODD number of consecutive backslashes
+//     (so escape-processing consumers treat that '$' as escaped; sender '\'
+//     cannot neutralize the escape by producing \\$ / \\\\$ / ...).
+//  2. The escaped body never ends with an ODD number of trailing backslashes
+//     (so the renderer-added closing fence '$' cannot be escape-neutralized).
+//
+// Ordinary LaTeX commands (no '$', no odd trailing '\') are preserved as-is.
+func TestRenderMathBackslashDollarInvariant(t *testing.T) {
+	c := &richCtx{truncated: new(bool)}
+
+	// Full TextMath (inline) and PageBlockMath (block) renderings — not helpers only.
+	cases := []struct {
+		name       string
+		src        string
+		wantInline string
+		wantBlock  string
+	}{
+		{
+			// Blind ReplaceAll("$","\\$") turns "\$" into "\\$" (even → unescaped $).
+			// Correct: odd preceding run already escapes '$'; leave as-is.
+			name:       "backslash-dollar-link-breakout",
+			src:        `\$ [x](http://evil)`,
+			wantInline: `$\$ [x](http://evil)$`,
+			wantBlock:  "$$\n\\$ [x](http://evil)\n$$",
+		},
+		{
+			// Trailing '\' must not escape the renderer-added closing '$'.
+			name:       "trailing-backslash",
+			src:        `\`,
+			wantInline: `$\\$`,
+			wantBlock:  "$$\n\\\\\n$$",
+		},
+		{
+			// Even run before '$' → pad one '\'; total odd.
+			name:       "double-backslash-before-dollar",
+			src:        `\\$`,
+			wantInline: `$\\\$` + `$`,
+			wantBlock:  "$$\n\\\\\\$\n$$",
+		},
+		{
+			// Odd run (3) already escapes '$'; preserve (no extra pad).
+			name:       "triple-backslash-before-dollar",
+			src:        `\\\$`,
+			wantInline: `$\\\$` + `$`,
+			wantBlock:  "$$\n\\\\\\$\n$$",
+		},
+		{
+			// Ordinary LaTeX: preserve backslash commands faithfully.
+			name:       "latex-frac",
+			src:        `\frac{a}{b}`,
+			wantInline: `$\frac{a}{b}$`,
+			wantBlock:  "$$\n\\frac{a}{b}\n$$",
+		},
+		{
+			// Repeated trailing backslashes: odd → pad to even.
+			name:       "trailing-triple-backslash",
+			src:        `\\\`,
+			wantInline: `$\\\\$`,
+			wantBlock:  "$$\n\\\\\\\\\n$$",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/inline", func(t *testing.T) {
+			got := renderRichText(&tg.TextMath{Source: tc.src}, c)
+			if got != tc.wantInline {
+				t.Fatalf("TextMath: got %q, want %q", got, tc.wantInline)
+			}
+			assertMathBodyInvariant(t, got, "$", "$")
+		})
+		t.Run(tc.name+"/block", func(t *testing.T) {
+			got := renderPageBlock(&tg.PageBlockMath{Source: tc.src}, c)
+			if got != tc.wantBlock {
+				t.Fatalf("PageBlockMath: got %q, want %q", got, tc.wantBlock)
+			}
+			// Block body sits between "$$\n" and "\n$$".
+			assertMathBodyInvariant(t, got, "$$\n", "\n$$")
+		})
+	}
+}
+
+// assertMathBodyInvariant checks the parser-independent emitted invariant on the
+// body between openFence and closeFence.
+func assertMathBodyInvariant(t *testing.T, full, openFence, closeFence string) {
+	t.Helper()
+	if !strings.HasPrefix(full, openFence) || !strings.HasSuffix(full, closeFence) {
+		t.Fatalf("full %q missing fences %q ... %q", full, openFence, closeFence)
+	}
+	body := full[len(openFence) : len(full)-len(closeFence)]
+	// (2) body must not end with an odd run of backslashes.
+	n := 0
+	for i := len(body) - 1; i >= 0 && body[i] == '\\'; i-- {
+		n++
+	}
+	if n%2 == 1 {
+		t.Fatalf("body %q ends with odd trailing backslash run (%d)", body, n)
+	}
+	// (1) every '$' in body must be preceded by an odd run of backslashes.
+	for i := 0; i < len(body); i++ {
+		if body[i] != '$' {
+			continue
+		}
+		bs := 0
+		for j := i - 1; j >= 0 && body[j] == '\\'; j-- {
+			bs++
+		}
+		if bs%2 == 0 {
+			t.Fatalf("body %q: '$' at %d preceded by even backslash run (%d)", body, i, bs)
+		}
 	}
 }
 
