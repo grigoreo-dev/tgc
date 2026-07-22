@@ -62,6 +62,9 @@ func Info(conn *client.Conn, selector string) (map[string]any, error) {
 			if user.Bot {
 				card["bot"] = true
 			}
+			if user.Premium {
+				card["premium"] = true
+			}
 			if phone, ok := user.GetPhone(); ok && phone != "" {
 				card["phone"] = phone
 			}
