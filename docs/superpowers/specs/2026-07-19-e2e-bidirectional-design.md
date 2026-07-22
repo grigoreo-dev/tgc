@@ -67,10 +67,12 @@ Profiles: `e2euser` (user account) and `e2ebot` (bot). Partner for user commands
 | `send` / `--reply` / `--file` / album | works |
 | `await` (LIVE-ONLY) | catches the user; must start the await BEFORE the user sends (bots have no read-pointer/backfill) |
 | `send --await-reply` | works (live-only) |
-| `read` (its conversation with the user) | works |
 | `edit` / `delete` / `forward` / `download` | works |
 | `info <user_id>` | works (the user has messaged the bot) |
-| `context <id>` | works |
+
+Bot **dialog history** `read` / `context` are **not** permitted (see A below:
+`bot_unsupported`). Full-live All Types verification therefore reads **user-side**
+history of the bot chat; bot-local sender `message_id` is diagnostic only.
 
 ### Deliberate skips (documented)
 
@@ -83,6 +85,8 @@ Assertions use the ACTUAL codes, verified empirically against the live bot (not
 |---|---|---|
 | `chats` | `messages.getDialogs` → `BOT_METHOD_INVALID`, mapped by `client.WrapErr` | `{"error":"bot_unsupported"}`, exit 1 → assert `error==bot_unsupported` && exit 1 |
 | `search` (dialogs mode, no `--messages`) | relies on dialogs | same `bot_unsupported`, exit 1 → assert `error==bot_unsupported` && exit 1 |
+| `read` (dialog history) | dialog/history APIs invalid for bots | `{"error":"bot_unsupported"}`, exit 1 (live evidence; full-live gate never uses bot `read`) |
+| `context <id>` | same dialog-history surface | same `bot_unsupported`, exit 1 (full-live gate never uses bot `context` for assertion) |
 | `members <group>` | bot not admin of the probe group | `{"error":"not_found",...unknown to this bot}`, exit 1 → assert `error==not_found` && exit 1 (or skip if a bot-admin group is provided, then assert a members list) |
 
 If a future run returns a bare `internal` instead of these mapped codes, that
@@ -122,7 +126,9 @@ scripts/e2e/
 ├── 04-dialogs.sh   # chats/search/members/read-filters — user side
 ├── 05-bot-limits.sh# bot chats/members/search → assert bot_unsupported/structured error
 ├── 06-meta.sh      # auth list, config path, version, self check, --pretty render
-└── run-all.sh      # source lib, run setup, run 01..06, summarize PASS/FAIL, exit 0/1
+├── 07-rich.sh      # reduced rich smoke (heading/bold/list + rich:true); part of run-all
+├── 08-rich-all-types.sh  # full-live All Types release gate (NOT in run-all)
+└── run-all.sh      # source lib, run setup, selftest + 01..07, summarize PASS/FAIL, exit 0/1
 ```
 
 lib.sh core:
@@ -184,8 +190,8 @@ Isolation:
   with a warning. Before any scenario runs, `setup.sh` prints which account
   (username/id) will act as "user" and which as "bot", so a wrong target is caught
   before messages are sent.
-- Test messages are prefixed `[e2e] <scenario> <nonce>` and cleaned up where
-  possible.
+- Test messages are marked `e2e <scenario> <nonce>` (Markdown-neutral; no
+  square brackets) and cleaned up where possible.
 
 Key constraint (from the await design): one `await` per profile at a time. User
 and bot are different profiles, so their awaits are safe in parallel; within one
@@ -234,8 +240,9 @@ Robustness (flakiness is the main enemy of live e2e):
   - `setup.sh` performs a **warm-up** throwaway round-trip first, so the first
     (slowest) bot connect/dispatcher spin-up doesn't happen inside a measured
     scenario.
-- Unique markers: each test message carries a nonce (`[e2e] <scenario> <RANDOM>`)
-  so the assertion matches its own text, not stale/other messages.
+- Unique markers: each test message carries a nonce (`e2e <scenario> <RANDOM>`)
+  so the assertion matches its own text with fixed-string checks, not
+  stale/other messages.
 - Retry wrapper for "arrived / not arrived": one retry of the step on a live
   race, then fail.
 - Rate-limit: small `sleep` between heavy steps to avoid FLOOD_WAIT on the test
@@ -280,7 +287,7 @@ Security:
 - **Cleanup vs correctness:** correctness rests on nonce-matching, never on delete. Cleanup = best-effort revoke-delete (not --for-me), never affects pass/fail.
 - **Secrets:** set +x guard around auth login; verbose excludes login; token never to files; README warns real messages / test account only.
 - **Profile collision:** default = dedicated e2euser; reusing `default` needs E2E_USER_PROFILE=default AND E2E_ALLOW_DEFAULT=1; setup prints the chosen user/bot accounts before sending.
-- **Bot-forbidden assertions:** empirically confirmed — chats/search → error=bot_unsupported exit1; members(non-admin) → error=not_found exit1. Assert exact codes; a bare `internal` would signal a WrapErr gap → bead, not a loosened assertion.
+- **Bot-forbidden assertions:** empirically confirmed — chats/search → error=bot_unsupported exit1; dialog history `read`/`context` → bot_unsupported (not a green bot capability); members(non-admin) → error=not_found exit1. Assert exact codes; a bare `internal` would signal a WrapErr gap → bead, not a loosened assertion. Full-live rich gate verifies via **user-side** history, not bot read/context.
 - **Download integrity:** document → sha256(sent)==sha256(downloaded); photo → non-empty + mime image/* + size>0 (Telegram re-compresses).
 - **run-all semantics:** setup fail-fast exit 2; scenarios collect-all exit 1-on-any-FAIL; in-file cascade → SKIP not FAIL.
 - **Concurrency:** flock on /tmp/tgc-e2e-<botprofile>.lock; refuse when busy (no queue).

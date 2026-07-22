@@ -10,8 +10,8 @@ die2() { printf 'SETUP ERROR: %s\n' "$1" >&2; exit 2; }
 
 command -v jq >/dev/null || die2 "jq not found"
 command -v "$TGC" >/dev/null 2>&1 || [ -x "$TGC" ] || die2 "tgc binary not found ($TGC)"
-# length check (never substitutes the token value into a trace)
-[ "${#TGC_BOT_TOKEN:-0}" -gt 0 ] 2>/dev/null || die2 "TGC_BOT_TOKEN not set (from .env / env)"
+# Presence check: :+set expands to a constant, never the token (safe under xtrace).
+[ -n "${TGC_BOT_TOKEN:+set}" ] || die2 "TGC_BOT_TOKEN not set (from .env / env)"
 
 # Default-collision guard
 if [ "$USER_PROFILE" = "default" ] && [ "${E2E_ALLOW_DEFAULT:-}" != "1" ]; then

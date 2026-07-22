@@ -3,6 +3,8 @@ package markup
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gotd/td/tg"
 )
@@ -71,6 +73,111 @@ func escapeLeadingBlockMeta(ln string) string {
 	return ln
 }
 
+// escapeLinkDest sanitizes a sender-controlled URL/email/phone value for use
+// inside a Markdown link destination: [label](DEST). Parentheses and backslashes
+// are escaped so they cannot close or restructure the destination. Literal '%'
+// is encoded as %25 so sender percent-sequences cannot be confused with our
+// own percent-encoding of whitespace/controls. Unicode White_Space (incl.
+// U+00A0, U+3000), line/paragraph separators (U+2028/U+2029), and control
+// characters (incl. DEL) are percent-encoded as UTF-8 bytes so downstream
+// Markdown consumers cannot treat them as destination-ending whitespace or
+// line breaks. Other characters (including '*') are preserved.
+func escapeLinkDest(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c == '\\' || c == '(' || c == ')' {
+			b.WriteByte('\\')
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		// Encode literal '%' so "%0A" (sender text) ≠ "%0A" (our newline encoding).
+		if c == '%' {
+			b.WriteString("%25")
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&b, "%%%02X", c)
+			i++
+			continue
+		}
+		// Controls (C0/C1/DEL) and Unicode White_Space / line separators.
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			for j := 0; j < size; j++ {
+				fmt.Fprintf(&b, "%%%02X", s[i+j])
+			}
+			i += size
+			continue
+		}
+		b.WriteString(s[i : i+size])
+		i += size
+	}
+	return b.String()
+}
+
+// escapeMathSource sanitizes a sender-controlled math expression for use inside
+// $...$ or $$...$$ fences under a parser-independent emitted invariant:
+//
+//  1. Every source '$' is emitted with an odd number of consecutive backslashes
+//     immediately before it (so escape-processing consumers treat that '$' as
+//     escaped). When the sender already provided an odd run, no extra '\' is
+//     added — blind ReplaceAll("$", "\\$") would turn "\$" into "\\$" and
+//     re-open the dollar.
+//  2. The escaped body never ends with an odd trailing backslash run, so the
+//     renderer-added closing fence '$' cannot be escape-neutralized.
+//
+// Ordinary LaTeX backslash commands (no '$', no odd trailing '\') are preserved.
+func escapeMathSource(s string) string {
+	return escapeMathBody(s, false)
+}
+
+// escapeInlineMathSource collapses every Unicode White_Space / line-paragraph
+// separator rune to a single ASCII space (so inline $...$ cannot span lines),
+// then applies the same math-body invariant as escapeMathSource.
+func escapeInlineMathSource(s string) string {
+	return escapeMathBody(s, true)
+}
+
+// escapeMathBody walks s once, optionally collapsing White_Space, and enforces
+// the dollar/trailing-backslash invariant used by both inline and block math.
+func escapeMathBody(s string, collapseSpace bool) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	bs := 0 // consecutive backslashes just written
+	for _, r := range s {
+		if collapseSpace && unicode.IsSpace(r) {
+			b.WriteByte(' ')
+			bs = 0
+			continue
+		}
+		if r == '\\' {
+			b.WriteByte('\\')
+			bs++
+			continue
+		}
+		if r == '$' {
+			// Need an odd backslash run before '$'. Pad only when current run is even.
+			if bs%2 == 0 {
+				b.WriteByte('\\')
+			}
+			b.WriteByte('$')
+			bs = 0
+			continue
+		}
+		b.WriteRune(r)
+		bs = 0
+	}
+	// Pad trailing odd backslash run so the renderer-added closing fence is safe.
+	if bs%2 == 1 {
+		b.WriteByte('\\')
+	}
+	return b.String()
+}
+
 // renderRichText renders an inline RichText tree to Markdown.
 func renderRichText(t tg.RichTextClass, c *richCtx) string {
 	if t == nil {
@@ -107,11 +214,11 @@ func renderRichText(t tg.RichTextClass, c *richCtx) string {
 	case *tg.TextSuperscript:
 		return "<sup>" + renderRichText(v.Text, c) + "</sup>"
 	case *tg.TextURL:
-		return "[" + renderRichText(v.Text, c) + "](" + v.URL + ")"
+		return "[" + renderRichText(v.Text, c) + "](" + escapeLinkDest(v.URL) + ")"
 	case *tg.TextEmail:
-		return "[" + renderRichText(v.Text, c) + "](mailto:" + v.Email + ")"
+		return "[" + renderRichText(v.Text, c) + "](mailto:" + escapeLinkDest(v.Email) + ")"
 	case *tg.TextPhone:
-		return "[" + renderRichText(v.Text, c) + "](tel:" + v.Phone + ")"
+		return "[" + renderRichText(v.Text, c) + "](tel:" + escapeLinkDest(v.Phone) + ")"
 	case *tg.TextConcat:
 		var b strings.Builder
 		for _, ch := range v.Texts {
@@ -121,7 +228,7 @@ func renderRichText(t tg.RichTextClass, c *richCtx) string {
 	case *tg.TextAnchor:
 		return renderRichText(v.Text, c)
 	case *tg.TextMath:
-		return "$" + v.Source + "$"
+		return "$" + escapeInlineMathSource(v.Source) + "$"
 	case *tg.TextCustomEmoji:
 		return escapeMarkdown(v.Alt)
 	case *tg.TextMentionName:
@@ -226,7 +333,7 @@ func renderPageBlock(b tg.PageBlockClass, c *richCtx) string {
 	case *tg.PageBlockDivider:
 		return "---"
 	case *tg.PageBlockMath:
-		return "$$\n" + v.Source + "\n$$"
+		return "$$\n" + escapeMathSource(v.Source) + "\n$$"
 	case *tg.PageBlockList:
 		var lines []string
 		for _, it := range v.Items {
@@ -358,7 +465,12 @@ func RenderRichMessage(rm tg.RichMessage, resolve map[int64]string) (string, boo
 	}
 	md := strings.Join(chunks, "\n\n")
 	if len(md) > maxRichBytes {
-		md = md[:maxRichBytes] + "\n[…]"
+		// Cut at or below the byte cap without splitting a UTF-8 rune.
+		n := maxRichBytes
+		for n > 0 && !utf8.RuneStart(md[n]) {
+			n--
+		}
+		md = md[:n] + "\n[…]"
 		trunc = true
 	}
 	return md, trunc
