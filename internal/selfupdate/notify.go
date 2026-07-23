@@ -29,7 +29,7 @@ func StartupNotify(w io.Writer) {
 				"latest":  latest,
 				"message": "run `tgc self update`",
 			})
-			w.Write(append(line, '\n'))
+			_, _ = w.Write(append(line, '\n'))
 		}
 	}
 	if !ok || time.Since(checkedAt) > cacheTTL {

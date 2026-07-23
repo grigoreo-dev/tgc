@@ -1,0 +1,42 @@
+version: "2"
+
+run:
+  go: "1.25"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # Best-effort cleanup, deferred closes, and stderr diagnostics are
+      # intentionally unchecked; flagging them is noise, not signal.
+      exclude-functions:
+        - (*os.File).Close
+        - (*compress/gzip.Writer).Close
+        - (io.Closer).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (net/http.ResponseWriter).Write
+        - os.Remove
+        - os.RemoveAll
+    staticcheck:
+      # Keep the valuable SA correctness checks; drop opinionated style (ST*)
+      # and quick-fix (QF*) suggestions — tagged-switch and package-comment
+      # nudges that don't match this codebase's conventions.
+      checks:
+        - "all"
+        - "-QF1002"
+        - "-ST1000"
+  exclusions:
+    rules:
+      # Tests use throwaway writers/temp files where checking every error
+      # return adds noise without catching real bugs.
+      - path: _test\.go
+        linters:
+          - errcheck
