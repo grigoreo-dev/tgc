@@ -65,7 +65,6 @@ func init() {
 	readCmd.Flags().StringVar(&readOpts.Since, "since", "", "start date (YYYY-MM-DD or RFC3339)")
 	readCmd.Flags().StringVar(&readOpts.Until, "until", "", "end date (YYYY-MM-DD or RFC3339)")
 	readCmd.Flags().StringVar(&readOpts.From, "from", "", "only from this sender (selector)")
-	readCmd.Flags().StringVar(&readOpts.Search, "search", "", "server-side search within chat")
 	contextCmd.Flags().IntVar(&contextRadius, "radius", 10, "messages around the target")
 	rootCmd.AddCommand(readCmd, contextCmd)
 }

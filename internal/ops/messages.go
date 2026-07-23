@@ -36,11 +36,9 @@ type ReadOpts struct {
 	Since    string
 	Until    string
 	From     string
-	Search   string
 }
 
-// Read returns chat messages newest-first. Search or From routes through
-// messages.search; otherwise messages.getHistory with id/date windows.
+// Read returns chat messages newest-first. From routes through messages.search; otherwise messages.getHistory with id/date windows.
 func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, error) {
 	peer, err := resolve.Resolve(conn, selector)
 	if err != nil {
@@ -62,9 +60,9 @@ func Read(conn *client.Conn, selector string, o ReadOpts) ([]map[string]any, err
 	}
 
 	switch {
-	case o.Search != "" || o.From != "":
+	case o.From != "":
 		req := &tg.MessagesSearchRequest{
-			Peer: ip, Q: o.Search, Filter: &tg.InputMessagesFilterEmpty{}, Limit: o.Limit,
+			Peer: ip, Q: "", Filter: &tg.InputMessagesFilterEmpty{}, Limit: o.Limit,
 		}
 		if o.From != "" {
 			fromPeer, err := resolve.Resolve(conn, o.From)
