@@ -246,22 +246,47 @@ func SearchChats(conn *client.Conn, query, kind string, limit int) ([]resolve.Pe
 	return found, nil
 }
 
-// SearchMessages performs a global message search across all chats. Each
-// result derives its own chat_id from the message peer. Part rich messages are
-// auto-fetched per peer (message IDs are not unique across chats).
-func SearchMessages(conn *client.Conn, query string, limit int) ([]map[string]any, error) {
-	res, err := conn.Ctx.Raw.MessagesSearchGlobal(conn.Ctx, &tg.MessagesSearchGlobalRequest{
+// SearchMessages searches messages across the user's chats
+// (messages.searchGlobal — "global" in the API means all chats known to the
+// user, not all of Telegram). Each result derives its own chat_id from the
+// message peer; Part rich messages are auto-fetched per peer. Rows are tagged
+// result:"message".
+func SearchMessages(conn *client.Conn, query string, o SearchOpts) ([]map[string]any, error) {
+	limit := o.Limit
+	if limit == 0 {
+		limit = 20
+	}
+	req := &tg.MessagesSearchGlobalRequest{
 		Q:          query,
 		Limit:      limit,
 		OffsetPeer: &tg.InputPeerEmpty{},
 		Filter:     &tg.InputMessagesFilterEmpty{},
-	})
+	}
+	applyGlobalKind(req, o.Type)
+	if o.Since != "" {
+		t, err := ParseDateArg(o.Since)
+		if err != nil {
+			return nil, err
+		}
+		req.MinDate = int(t.Unix())
+	}
+	if o.Until != "" {
+		t, err := ParseDateArg(o.Until)
+		if err != nil {
+			return nil, err
+		}
+		req.MaxDate = int(t.Unix())
+	}
+	res, err := conn.Ctx.Raw.MessagesSearchGlobal(conn.Ctx, req)
 	if err != nil {
 		return nil, client.WrapErr(err)
 	}
 	maps := collectMessages(res, 0, time.Time{})
 	autofetchGlobalRichParts(conn, res, maps)
 	stripRichMapKeys(maps)
+	for _, m := range maps {
+		m["result"] = "message"
+	}
 	return maps, nil
 }
 

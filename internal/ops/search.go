@@ -4,6 +4,8 @@
 package ops
 
 import (
+	"github.com/gotd/td/tg"
+
 	"github.com/grigoreo-dev/tgc/internal/output"
 	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
@@ -69,4 +71,16 @@ func filterPeersByKind(peers []resolve.Peer, kind string) []resolve.Peer {
 		}
 	}
 	return out
+}
+
+// applyGlobalKind maps a --type chat-kind onto SearchGlobal only-flags.
+func applyGlobalKind(req *tg.MessagesSearchGlobalRequest, kind string) {
+	switch kind {
+	case "user":
+		req.UsersOnly = true
+	case "group":
+		req.GroupsOnly = true
+	case "channel":
+		req.BroadcastsOnly = true
+	}
 }

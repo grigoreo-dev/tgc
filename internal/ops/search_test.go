@@ -4,6 +4,8 @@ package ops
 import (
 	"testing"
 
+	"github.com/gotd/td/tg"
+
 	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
 
@@ -57,5 +59,27 @@ func TestFilterPeersByKind(t *testing.T) {
 	}
 	if len(filterPeersByKind(in, "")) != 3 {
 		t.Fatal("empty kind must keep all")
+	}
+}
+
+func TestApplyGlobalKind(t *testing.T) {
+	cases := []struct {
+		kind                    string
+		users, groups, channels bool
+	}{
+		{"", false, false, false},
+		{"chats", false, false, false},
+		{"messages", false, false, false},
+		{"user", true, false, false},
+		{"group", false, true, false},
+		{"channel", false, false, true},
+	}
+	for _, c := range cases {
+		req := &tg.MessagesSearchGlobalRequest{}
+		applyGlobalKind(req, c.kind)
+		if req.UsersOnly != c.users || req.GroupsOnly != c.groups || req.BroadcastsOnly != c.channels {
+			t.Fatalf("kind %q: got users=%v groups=%v broadcasts=%v",
+				c.kind, req.UsersOnly, req.GroupsOnly, req.BroadcastsOnly)
+		}
 	}
 }

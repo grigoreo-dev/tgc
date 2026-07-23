@@ -87,7 +87,7 @@ var searchCmd = &cobra.Command{
 		}
 		defer conn.Close()
 		if searchMsgs {
-			items, err := ops.SearchMessages(conn, args[0], searchLimit)
+			items, err := ops.SearchMessages(conn, args[0], ops.SearchOpts{Limit: searchLimit})
 			if err != nil {
 				return err
 			}
