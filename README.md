@@ -119,7 +119,7 @@ flags.
 | `chats`    | List dialogs (cached 5m; `--fresh` to refresh). |
 | `info`     | Show a chat or user card (id, type, title; username, phone, about, members_count, bot, premium when set). |
 | `members`  | List the members of a group. |
-| `search`   | Search chats and contacts; `--messages` for global message search. |
+| `search`   | Search chats and messages (both by default); `--type chats|messages|user|group|channel` to narrow; `--chat <peer>` to search inside one chat (`--from`, `--since`, `--until`). |
 | `read`     | Read chat history, newest first. |
 | `await`    | Block until incoming messages arrive, print them, mark them read. |
 | `context`  | Show a message with the messages surrounding it. |
@@ -198,10 +198,11 @@ config with:
 
 ## Bot-mode limits
 
-A bot account can't list dialogs or run a global chat search — both return
-`bot_unsupported`, because Telegram doesn't expose those to bots. A bot can send
-and read in chats it belongs to: address a user by `@username`, or by numeric
-user id for someone who has already messaged the bot.
+A bot account can't list dialogs or run `search` — both return
+`bot_unsupported`, because Telegram doesn't expose dialog listing or contacts
+search to bots. A bot can send and read in chats it belongs to: address a user
+by `@username`, or by numeric user id for someone who has already messaged the
+bot.
 
 ## Await incoming (agent conversations)
 

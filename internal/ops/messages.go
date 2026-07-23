@@ -28,7 +28,7 @@ func ParseDateArg(s string) (time.Time, error) {
 	return time.Time{}, output.Errf("bad_args", "cannot parse date %q (want YYYY-MM-DD or RFC3339)", s)
 }
 
-// ReadOpts controls Read: paging, id/date windows, sender and search filters.
+// ReadOpts controls Read: paging, id/date windows, and sender filter.
 type ReadOpts struct {
 	Limit    int
 	BeforeID int

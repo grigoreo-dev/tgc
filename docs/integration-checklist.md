@@ -44,8 +44,10 @@ tgc clears the partial session and retries rather than leaving a broken profile.
   cache. `tgc chats --fresh` bypasses the cache and refetches.
 - [ ] `tgc info @user`, `tgc info <id>`, `tgc info me` — a chat/user card.
   `me`, `self`, and `saved` all resolve to your Saved Messages.
-- [ ] `tgc search <partial>` — candidate chats/contacts. An ambiguous fuzzy
-  match returns an `ambiguous` error whose body carries the candidate list.
+- [ ] `tgc search <partial>` — chats and messages by default (`result` =
+  `chat`|`message`); `--type chats|messages|user|group|channel` to narrow;
+  `--chat <peer>` for in-chat search. An ambiguous fuzzy peer match returns an
+  `ambiguous` error whose body carries the candidate list.
 - [ ] `tgc members <group>` — the member list for a group you belong to.
 
 ## Messages
@@ -54,8 +56,7 @@ tgc clears the partial session and retries rather than leaving a broken profile.
   `--reply <id>`; read from stdin with `echo hi | tgc send <chat> -`.
 - [ ] `tgc read <chat> --limit N` — newest first, each message carrying the full
   field contract.
-- [ ] Filters: `--search <term>`, `--from @user`, `--since YYYY-MM-DD`,
-  `--before <id>`.
+- [ ] Filters: `--from @user`, `--since YYYY-MM-DD`, `--before <id>`.
 - [ ] `tgc context <chat> <id> --radius N` — the message plus N messages on each
   side.
 - [ ] `tgc edit <chat> <id> "..."` — returns a real `{message_id, chat_id,
@@ -81,7 +82,7 @@ tgc clears the partial session and retries rather than leaving a broken profile.
 ## Bot mode
 
 - [ ] `tgc --profile bot chats` — `bot_unsupported` (bots can't list dialogs).
-- [ ] `tgc --profile bot search foo` (without `--messages`) — `bot_unsupported`.
+- [ ] `tgc --profile bot search foo` — `bot_unsupported` (search unavailable for bots).
 - [ ] `tgc --profile bot send <user_id> "hi"` — works. Bots resolve a numeric
   user id directly, provided that user has messaged the bot first.
 
