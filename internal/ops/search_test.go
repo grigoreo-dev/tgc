@@ -1,7 +1,11 @@
 // internal/ops/search_test.go
 package ops
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/grigoreo-dev/tgc/internal/resolve"
+)
 
 func TestValidateSearchOpts(t *testing.T) {
 	cases := []struct {
@@ -28,5 +32,30 @@ func TestValidateSearchOpts(t *testing.T) {
 				t.Fatalf("ValidateSearchOpts(%+v) err=%v, wantErr=%v", c.o, err, c.wantErr)
 			}
 		})
+	}
+}
+
+func TestPeerRow(t *testing.T) {
+	p := resolve.Peer{ID: 42, AccessHash: 999, Type: "user", Title: "Anna", Username: "anna"}
+	row := peerRow(p)
+	if row["result"] != "chat" || row["id"] != int64(42) || row["type"] != "user" || row["title"] != "Anna" || row["username"] != "anna" {
+		t.Fatalf("unexpected row: %+v", row)
+	}
+	if _, leaked := row["access_hash"]; leaked {
+		t.Fatal("AccessHash leaked into search output")
+	}
+	if _, ok := peerRow(resolve.Peer{ID: 1, Type: "group", Title: "G"})["username"]; ok {
+		t.Fatal("empty username must be omitted")
+	}
+}
+
+func TestFilterPeersByKind(t *testing.T) {
+	in := []resolve.Peer{{ID: 1, Type: "user"}, {ID: 2, Type: "group"}, {ID: 3, Type: "channel"}}
+	got := filterPeersByKind(in, "group")
+	if len(got) != 1 || got[0].ID != 2 {
+		t.Fatalf("want only group peer, got %+v", got)
+	}
+	if len(filterPeersByKind(in, "")) != 3 {
+		t.Fatal("empty kind must keep all")
 	}
 }

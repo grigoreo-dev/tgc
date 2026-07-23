@@ -96,7 +96,7 @@ var searchCmd = &cobra.Command{
 			}
 			return nil
 		}
-		peers, err := ops.SearchChats(conn, args[0], searchLimit)
+		peers, err := ops.SearchChats(conn, args[0], "", searchLimit)
 		if err != nil {
 			return err
 		}

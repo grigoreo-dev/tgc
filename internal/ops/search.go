@@ -5,6 +5,7 @@ package ops
 
 import (
 	"github.com/grigoreo-dev/tgc/internal/output"
+	"github.com/grigoreo-dev/tgc/internal/resolve"
 )
 
 // SearchOpts controls the unified search command.
@@ -40,4 +41,32 @@ func ValidateSearchOpts(o SearchOpts) error {
 			"--from requires --chat; global search cannot filter by sender")
 	}
 	return nil
+}
+
+// peerRow projects a Peer into a tagged search-output row (no AccessHash).
+func peerRow(p resolve.Peer) map[string]any {
+	row := map[string]any{
+		"result": "chat",
+		"id":     p.ID,
+		"type":   p.Type,
+		"title":  p.Title,
+	}
+	if p.Username != "" {
+		row["username"] = p.Username
+	}
+	return row
+}
+
+// filterPeersByKind keeps peers of the given kind; empty kind keeps all.
+func filterPeersByKind(peers []resolve.Peer, kind string) []resolve.Peer {
+	if kind == "" {
+		return peers
+	}
+	out := make([]resolve.Peer, 0, len(peers))
+	for _, p := range peers {
+		if p.Type == kind {
+			out = append(out, p)
+		}
+	}
+	return out
 }

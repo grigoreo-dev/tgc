@@ -218,8 +218,9 @@ func legacyChatMembers(conn *client.Conn, p *resolve.Peer, limit int) ([]map[str
 }
 
 // SearchChats searches local dialogs (fuzzy) and the contacts.Search API,
-// deduplicated by peer id.
-func SearchChats(conn *client.Conn, query string, limit int) ([]resolve.Peer, error) {
+// deduplicated by peer id. kind ("user"|"group"|"channel") filters results;
+// empty kind keeps all.
+func SearchChats(conn *client.Conn, query, kind string, limit int) ([]resolve.Peer, error) {
 	local, err := resolve.Dialogs(conn, false, 0)
 	if err != nil {
 		return nil, err
@@ -238,6 +239,7 @@ func SearchChats(conn *client.Conn, query string, limit int) ([]resolve.Peer, er
 			}
 		}
 	}
+	found = filterPeersByKind(found, kind)
 	if limit > 0 && len(found) > limit {
 		found = found[:limit]
 	}
