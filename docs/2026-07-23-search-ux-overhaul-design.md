@@ -86,6 +86,8 @@ Section order: chats first, then messages. `--limit` applies per section.
 
 - `read --search` flag (and `ops.ReadOpts.Search` routing into
   `MessagesSearch`) — `read` keeps `--from/--since/--until` as read filters.
+  Note: `read --from` continues to route through `messages.search` internally
+  (unchanged); only the `--search` query flag is removed.
 - `search --messages` flag.
 - Peer-search-as-default `search` behavior.
 

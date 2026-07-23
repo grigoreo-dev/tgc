@@ -15,7 +15,8 @@
 - Breaking change is intended: `read --search` and `search --messages` are deleted with NO aliases or deprecation shims.
 - Error contract: user-facing errors go through `output.Errf(code, ...)`; codes used here: `bad_args`, `bot_unsupported`.
 - `--type` vocabulary is exactly: `chats|messages|user|group|channel`.
-- Peer rows in search output MUST NOT include `AccessHash` (emit projected maps, not `resolve.Peer` structs).
+- Peer rows in search output MUST NOT include `AccessHash` (emit projected maps, not `resolve.Peer` structs). Scope note: this closes the leak for the new `search` output only; the pre-existing `chats`/`--pretty` raw-struct leak is tracked separately (tgc-vls) and out of scope here.
+- `chats` (dialog listing, `ops.Chats`) is unaffected by this plan.
 - Default `--limit` is 20 and applies **per section**.
 - Section order in default mode: chat rows first, then message rows.
 - Partial failure in default (two-RPC) mode: emit surviving section + `output.Warnf`; explicit `--type`/`--chat` modes fail hard.
@@ -756,6 +757,8 @@ Expected: JSONL rows with `result` field; last command prints `bad_args` error.
 
 - [ ] **Step 2: Update docs**
 
+Lines to edit: `README.md:122` (+bot section `:201`), `README.ru.md:127`, `docs/integration-checklist.md:84` **and `:57`** (the `read <chat>` filters line lists `--search <term>` — drop it; note `:47` about fuzzy-resolve `ambiguous` errors stays as-is, it describes `resolve.Resolve`, not this command).
+
 `README.md` command table — replace the `search` row with:
 
 ```markdown
@@ -766,8 +769,8 @@ Remove any `read` row mention of `--search`. Update the bot section (`:201`) to 
 
 - [ ] **Step 3: Verify**
 
-Run: `rg -n '\-\-messages|read --search' README.md README.ru.md docs/integration-checklist.md`
-Expected: no matches. `go build ./... && go vet ./... && go test ./...` green.
+Run: `rg -n -- '--messages|--search' README.md README.ru.md docs/integration-checklist.md`
+Expected: no matches (bare `--search` included: after Task 6 no such flag exists anywhere in the CLI). `go build ./... && go vet ./... && go test ./...` green.
 
 - [ ] **Step 4: Commit**
 
