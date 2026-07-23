@@ -83,3 +83,23 @@ func TestApplyGlobalKind(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchSections(t *testing.T) {
+	cases := []struct {
+		typ            string
+		chats, message bool
+	}{
+		{"", true, true},
+		{"chats", true, false},
+		{"messages", false, true},
+		{"user", true, true},
+		{"group", true, true},
+		{"channel", true, true},
+	}
+	for _, c := range cases {
+		gc, gm := searchSections(SearchOpts{Type: c.typ})
+		if gc != c.chats || gm != c.message {
+			t.Fatalf("type %q: got (%v,%v), want (%v,%v)", c.typ, gc, gm, c.chats, c.message)
+		}
+	}
+}
