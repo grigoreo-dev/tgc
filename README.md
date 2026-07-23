@@ -119,7 +119,7 @@ flags.
 | `chats`    | List dialogs (cached 5m; `--fresh` to refresh). |
 | `info`     | Show a chat or user card (id, type, title; username, phone, about, members_count, bot, premium when set). |
 | `members`  | List the members of a group. |
-| `search`   | Search chats and messages (both by default); `--type chats|messages|user|group|channel` to narrow; `--chat <peer>` to search inside one chat (`--from`, `--since`, `--until`). |
+| `search`   | Search chats and messages (both by default); `--type chats\|messages\|user\|group\|channel` to narrow; `--chat <peer>` to search inside one chat (`--from`, `--since`, `--until`). |
 | `read`     | Read chat history, newest first. |
 | `await`    | Block until incoming messages arrive, print them, mark them read. |
 | `context`  | Show a message with the messages surrounding it. |

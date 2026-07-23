@@ -193,7 +193,7 @@ bash scripts/e2e/08-rich-all-types.sh --selftest
 | `01-send-read.sh` | send / read / reply / context / edit / forward, both directions. |
 | `02-await.sh` | `await` burst coalescing, timeout (exit 0), `send --await-reply`, bot live-only inbound. |
 | `03-media.sh` | document sha256 round-trip, photo mime/non-empty, album (media-group) sharing one `grouped_id`. |
-| `04-dialogs.sh` | user `chats` / `search` / global message search / `read` shape. |
+| `04-dialogs.sh` | user `chats` / dual `search` / `--type messages|chats` / bad `--type` / `read` shape. |
 | `05-bot-limits.sh` | bot-forbidden dialog commands (`bot_unsupported` / `not_found` + exit 1). |
 | `06-meta.sh` | `auth list` / `config path` / `version` / `self check` (soft) / `--pretty` is non-JSON. |
 | `07-rich.sh` | **Reduced rich smoke** (not full golden): heading + bold + list + `rich:true`. Part of `run-all.sh`. |
@@ -218,9 +218,10 @@ path is `internal/cmd/rich-e2e-send` + `internal/richfixture`.
 ## Notes on the bot profile
 
 - **Bots are live-only inbound.** A bot cannot `read`/`context`/`chats`/`search`
-  (dialog-based → `bot_unsupported`). Its only way to receive a message is
-  `await`, which watches live updates. Full-live therefore verifies on the
-  **user** profile history, never via bot-local message id lookup.
+  (dialog / global-search surfaces → `bot_unsupported`). Its only way to receive
+  a message is `await`, which watches live updates. Full-live therefore verifies
+  on the **user** profile history, never via bot-local message id lookup.
+  Message lookup uses `search <q> --chat <peer>` (not removed `read --search`).
 - **One await per profile.** Only one `await` may run per profile at a time —
   parallel scenarios on the same bot profile would steal each other's updates, so
   the runner executes scenarios **sequentially** (also avoids FLOOD_WAIT).

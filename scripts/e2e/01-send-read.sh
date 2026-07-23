@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/e2e/01-send-read.sh — messaging commands, both directions.
-# user->bot: send / read --search / reply / info @bot / context / edit / forward
+# user->bot: send / search --chat / reply / info @bot / context / edit / forward
 # bot->user: send / read (bot_unsupported, dialog-based) / info <user_id>
 # Nonce-keyed assertions; cascade to `skip` (not `fail`) when a prerequisite send fails.
 set -uo pipefail
@@ -20,9 +20,9 @@ assert_exit "01: user send exit" 0 "$ec"
 assert_nonempty "01: user send message_id" "$MID"
 
 if [ -n "${MID:-}" ]; then
-  # read back (search by nonce)
-  u read "$BOT" --search "$N" --limit 5 > "$T" 2>&1
-  assert_json "01: user read finds nonce" "$T" ".text" "$N"
+  # search in-chat by nonce (replaces removed read --search)
+  u search "$N" --chat "$BOT" --limit 5 > "$T" 2>&1
+  assert_json "01: user search finds nonce" "$T" 'select(.result=="message") | .text' "$N"
   # reply
   N2=$(nonce 01-reply); u send "$BOT" "$N2" --reply "$MID" > "$T"
   RID=$(jqf "$T" '.message_id')

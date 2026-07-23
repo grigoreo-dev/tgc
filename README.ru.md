@@ -124,7 +124,7 @@ tgc read @user --limit 10
 | `chats`    | Список диалогов (кэш 5 мин; `--fresh` для обновления). |
 | `info`     | Показать карточку чата или пользователя (id, type, title; username, phone, about, members_count, bot, premium при наличии). |
 | `members`  | Список участников группы. |
-| `search`   | Поиск чатов и сообщений (по умолчанию оба); `--type chats|messages|user|group|channel` — сузить; `--chat <peer>` — искать внутри одного чата (`--from`, `--since`, `--until`). |
+| `search`   | Поиск чатов и сообщений (по умолчанию оба); `--type chats\|messages\|user\|group\|channel` — сузить; `--chat <peer>` — искать внутри одного чата (`--from`, `--since`, `--until`). |
 | `read`     | Читать историю чата, сначала новые. |
 | `await`    | Ждать входящие сообщения, вывести их и отметить прочитанными. |
 | `context`  | Показать сообщение вместе с окружающими его сообщениями. |

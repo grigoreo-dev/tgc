@@ -45,6 +45,21 @@ func ValidateSearchOpts(o SearchOpts) error {
 		return output.Errf("bad_args",
 			"--from requires --chat; global search cannot filter by sender")
 	}
+	if o.Type == "chats" && (o.Since != "" || o.Until != "") {
+		return output.Errf("bad_args",
+			"--since/--until apply to message search; drop them with --type chats")
+	}
+	// Fail hard pre-connect on unparseable dates (all modes).
+	if o.Since != "" {
+		if _, err := ParseDateArg(o.Since); err != nil {
+			return err
+		}
+	}
+	if o.Until != "" {
+		if _, err := ParseDateArg(o.Until); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

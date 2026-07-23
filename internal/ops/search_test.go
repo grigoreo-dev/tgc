@@ -26,6 +26,10 @@ func TestValidateSearchOpts(t *testing.T) {
 		{"type with chat rejected", SearchOpts{Type: "messages", Chat: "@devops"}, true},
 		{"from without chat rejected", SearchOpts{From: "@vasya"}, true},
 		{"unknown type rejected", SearchOpts{Type: "posts"}, true},
+		{"valid since ok", SearchOpts{Since: "2024-01-15"}, false},
+		{"garbage since rejected", SearchOpts{Since: "garbage"}, true},
+		{"garbage until rejected", SearchOpts{Until: "not-a-date"}, true},
+		{"type chats+since rejected", SearchOpts{Type: "chats", Since: "2024-01-15"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
