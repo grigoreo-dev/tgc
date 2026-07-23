@@ -20,6 +20,7 @@ structured JSON errors to stderr, so an agent can pipe and parse every result.
 
 <p>
   <a href="https://github.com/grigoreo-dev/tgc/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/grigoreo-dev/tgc/ci.yml?style=flat-square&logo=githubactions&logoColor=white&label=CI&labelColor=0d1117&color=39ff14"></a>
+  <a href="https://golangci-lint.run"><img alt="golangci-lint" src="https://img.shields.io/badge/lint-golangci--lint-00ADD8?style=flat-square&logo=go&logoColor=white&labelColor=0d1117"></a>
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-8b949e?style=flat-square&labelColor=0d1117">
   <img alt="Agent-first" src="https://img.shields.io/badge/agent--first-%E2%9C%93-22d3ee?style=flat-square&labelColor=0d1117">
 </p>
