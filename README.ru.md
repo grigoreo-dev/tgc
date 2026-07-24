@@ -11,19 +11,14 @@
 структурированные JSON-ошибки в stderr, поэтому агент может передавать и
 разбирать каждый результат.
 
-<p>
-  <a href="https://github.com/grigoreo-dev/tgc/releases"><img alt="Release" src="https://img.shields.io/github/v/release/grigoreo-dev/tgc?style=for-the-badge&logo=github&color=39ff14&labelColor=0d1117"></a>
-  <a href="https://go.dev"><img alt="Go" src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go&logoColor=white&labelColor=0d1117"></a>
-  <a href="https://core.telegram.org/mtproto"><img alt="MTProto" src="https://img.shields.io/badge/MTProto-229ED9?style=for-the-badge&logo=telegram&logoColor=white&labelColor=0d1117"></a>
-  <img alt="Output" src="https://img.shields.io/badge/output-JSONL-39ff14?style=for-the-badge&logo=json&logoColor=black&labelColor=0d1117">
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/grigoreo-dev/tgc?style=for-the-badge&color=8b949e&labelColor=0d1117"></a>
-</p>
-
-<p>
-  <a href="https://github.com/grigoreo-dev/tgc/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/grigoreo-dev/tgc/ci.yml?style=flat-square&logo=githubactions&logoColor=white&label=CI&labelColor=0d1117&color=39ff14"></a>
-  <a href="https://golangci-lint.run"><img alt="golangci-lint" src="https://img.shields.io/badge/lint-golangci--lint-00ADD8?style=flat-square&logo=go&logoColor=white&labelColor=0d1117"></a>
-  <img alt="Platforms" src="https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-8b949e?style=flat-square&labelColor=0d1117">
-  <img alt="Agent-first" src="https://img.shields.io/badge/agent--first-%E2%9C%93-22d3ee?style=flat-square&labelColor=0d1117">
+<p align="center">
+  <a href="https://github.com/grigoreo-dev/tgc/releases"><img alt="Release" src="https://img.shields.io/github/v/release/grigoreo-dev/tgc?style=flat-square&logo=github&label=release&labelColor=0d1117&color=238636"></a>
+  <a href="https://github.com/grigoreo-dev/tgc/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/grigoreo-dev/tgc/ci.yml?style=flat-square&logo=githubactions&logoColor=white&label=CI&labelColor=0d1117&color=238636"></a>
+  <a href="https://go.dev"><img alt="Go" src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go&logoColor=white&labelColor=0d1117"></a>
+  <a href="https://core.telegram.org/mtproto"><img alt="MTProto" src="https://img.shields.io/badge/MTProto-229ED9?style=flat-square&logo=telegram&logoColor=white&labelColor=0d1117"></a>
+  <img alt="Output" src="https://img.shields.io/badge/output-JSONL-2ea043?style=flat-square&logo=json&logoColor=white&labelColor=0d1117">
+  <img alt="Agent-first" src="https://img.shields.io/badge/agent--first-%E2%9C%93-2ea043?style=flat-square&labelColor=0d1117">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/grigoreo-dev/tgc?style=flat-square&label=license&labelColor=0d1117&color=8b949e"></a>
 </p>
 
 [English](README.md) · [Установка](#установка) · [Быстрый старт](#быстрый-старт) · [Команды](#команды) · [Документация](#документация)
