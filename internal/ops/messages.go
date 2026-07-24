@@ -857,7 +857,7 @@ func randomID() int64 {
 			// crypto/rand should not fail; fall back to a time-derived seed.
 			return time.Now().UnixNano() | 1
 		}
-		id := int64(binary.LittleEndian.Uint64(b[:]))
+		id := int64(binary.LittleEndian.Uint64(b[:])) //nosec G115 -- reinterpreting 64 bits of a Telegram id, not narrowing a computed value
 		if id != 0 {
 			return id
 		}

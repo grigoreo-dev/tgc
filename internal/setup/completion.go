@@ -58,7 +58,7 @@ func filePermOr(path string, def os.FileMode) os.FileMode {
 // existing Mode().Perm(); defaultCreatePerm only for create-from-absent).
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nosec G301 -- completion dir must be traversable by the shell/package manager; holds no secrets
 		return err
 	}
 	f, err := os.CreateTemp(dir, ".tgc-setup-*")
@@ -147,7 +147,7 @@ func writeIfChanged(path string, data []byte, createPerm os.FileMode) (bool, err
 	if err != nil {
 		return false, err
 	}
-	if existing, err := os.ReadFile(target); err == nil {
+	if existing, err := os.ReadFile(target); err == nil { //nosec G304 -- target is a resolved managed completion path, not user input
 		if bytes.Equal(existing, data) {
 			return false, nil
 		}
@@ -164,7 +164,7 @@ func writeIfChanged(path string, data []byte, createPerm os.FileMode) (bool, err
 // fileHasMarker reports whether path exists and its first line contains FileMarker.
 // Missing files return (false, nil). Read follows symlinks.
 func fileHasMarker(path string) (bool, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nosec G304 -- path is a resolved managed completion path, not user input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil

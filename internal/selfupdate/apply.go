@@ -88,7 +88,7 @@ func downloadAndVerify(ctx context.Context, c *http.Client, asset *Asset, checks
 	if err != nil {
 		return "", nil, err
 	}
-	cleanup := func() { os.RemoveAll(tmpDir) }
+	cleanup := func() { _ = os.RemoveAll(tmpDir) }
 
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -164,7 +164,7 @@ func replaceFileAtomic(newBin, target string) error {
 		return err
 	}
 	tmp.Close()
-	if err := os.Chmod(tmpName, 0o755); err != nil {
+	if err := os.Chmod(tmpName, 0o755); err != nil { //nosec G302 -- the CLI binary must be executable; 0600 would make it non-runnable
 		os.Remove(tmpName)
 		return err
 	}

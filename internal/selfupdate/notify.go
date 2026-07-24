@@ -49,7 +49,7 @@ func spawnRefresh() error {
 		return err
 	}
 	defer devnull.Close()
-	cmd := exec.Command(exe, "self", "check", "--refresh-cache")
+	cmd := exec.Command(exe, "self", "check", "--refresh-cache") //nosec G204 -- exe is os.Executable() from the Go runtime, never user input
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull

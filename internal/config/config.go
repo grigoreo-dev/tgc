@@ -81,11 +81,11 @@ func Save(c *Config) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := toml.NewEncoder(tmp).Encode(c); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -158,7 +158,7 @@ func ResolveProfile(explicit string) (*Profile, error) {
 		return nil, err
 	}
 	p := &Profile{Name: name, Dir: dir, SessionPath: filepath.Join(dir, "session.db")}
-	if b, err := os.ReadFile(filepath.Join(dir, "type")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(dir, "type")); err == nil { //nosec G304 -- dir is the resolved tgc config root, not user-controlled input
 		p.Type = strings.TrimSpace(string(b))
 	}
 	return p, nil
