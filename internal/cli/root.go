@@ -33,6 +33,7 @@ func ProfileName() string {
 // Pretty reports whether human-readable output was requested.
 func Pretty() bool { return flagPretty }
 
+// Execute is the root command entry point: wires flags, version, and runs cobra.
 func Execute() {
 	rootCmd.PersistentFlags().StringVar(&flagProfile, "profile", "", "profile name (default from config or TGC_PROFILE)")
 	rootCmd.PersistentFlags().BoolVar(&flagPretty, "pretty", false, "human-readable output")

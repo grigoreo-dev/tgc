@@ -42,7 +42,7 @@ var sendCmd = &cobra.Command{
 	Use:   "send <chat> [text|-]",
 	Short: "Send a message (Markdown by default; --file for media)",
 	Args:  cobra.RangeArgs(1, 2),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		// Flag validation before any MTProto connect: a flag error should not
 		// waste a dial.
 		if awaitReply && len(sendFiles) > 0 {
@@ -95,7 +95,7 @@ var editCmd = &cobra.Command{
 	Use:   "edit <chat> <message_id> <text>",
 	Short: "Edit a message",
 	Args:  cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		id, err := strconv.Atoi(args[1])
 		if err != nil {
 			return output.Errf("bad_args", "message_id must be a number")
@@ -118,7 +118,7 @@ var deleteCmd = &cobra.Command{
 	Use:   "delete <chat> <message_id>...",
 	Short: "Delete messages (for everyone by default; --for-me to keep for others)",
 	Args:  cobra.MinimumNArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		var ids []int
 		for _, a := range args[1:] {
 			id, err := strconv.Atoi(a)
@@ -145,7 +145,7 @@ var forwardCmd = &cobra.Command{
 	Use:   "forward <from_chat> <message_id> <to_chat>",
 	Short: "Forward a message",
 	Args:  cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		id, err := strconv.Atoi(args[1])
 		if err != nil {
 			return output.Errf("bad_args", "message_id must be a number")

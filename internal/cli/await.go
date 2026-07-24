@@ -45,7 +45,7 @@ var awaitCmd = &cobra.Command{
 	Use:   "await <chat>",
 	Short: "Wait for the chat's incoming messages, print them, mark read, exit",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		conn, err := client.ConnectWatch(ProfileName())
 		if err != nil {
 			return err

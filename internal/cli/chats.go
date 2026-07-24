@@ -19,7 +19,7 @@ var searchOpts ops.SearchOpts
 var chatsCmd = &cobra.Command{
 	Use:   "chats",
 	Short: "List dialogs (cached 5m; --fresh to refresh)",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		conn, err := client.Connect(ProfileName())
 		if err != nil {
 			return err
@@ -40,7 +40,7 @@ var infoCmd = &cobra.Command{
 	Use:   "info <chat>",
 	Short: "Show chat/user card",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		conn, err := client.Connect(ProfileName())
 		if err != nil {
 			return err
@@ -59,7 +59,7 @@ var membersCmd = &cobra.Command{
 	Use:   "members <group>",
 	Short: "List group members",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		conn, err := client.Connect(ProfileName())
 		if err != nil {
 			return err
@@ -80,7 +80,7 @@ var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Search chats and messages; --type to narrow, --chat to search inside one chat",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		if err := ops.ValidateSearchOpts(searchOpts); err != nil {
 			return err // bad_args before connecting
 		}

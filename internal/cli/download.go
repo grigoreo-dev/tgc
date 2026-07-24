@@ -18,7 +18,7 @@ var downloadCmd = &cobra.Command{
 	Use:   "download <chat> <message_id>",
 	Short: "Download media from a message",
 	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		id, err := strconv.Atoi(args[1])
 		if err != nil {
 			return output.Errf("bad_args", "message_id must be a number")

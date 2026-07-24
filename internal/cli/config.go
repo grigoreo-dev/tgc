@@ -14,7 +14,7 @@ var configCmd = &cobra.Command{
 var configPathCmd = &cobra.Command{
 	Use:   "path",
 	Short: "Show the active config directory and how it was selected",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		output.Emit(runConfigPath())
 		return nil
 	},

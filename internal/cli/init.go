@@ -15,7 +15,7 @@ var initProfile string
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Create a local ./.tgc config directory in the current directory",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		name := initProfile
 		if name == "" {
 			name = "default"

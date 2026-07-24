@@ -23,7 +23,7 @@ var (
 var authLoginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Log in interactively (user) or with --bot-token (bot)",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if loginAPIID != 0 || loginAPIHash != "" {
 			cfg, err := config.Load()
 			if err != nil {
@@ -66,7 +66,7 @@ var authLoginCmd = &cobra.Command{
 var authExportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "Export session as a portable string",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		conn, err := client.Connect(ProfileName())
 		if err != nil {
 			return err
@@ -92,7 +92,7 @@ var authImportCmd = &cobra.Command{
 	Use:   "import [file]",
 	Short: "Import a session string (arg=file, stdin, or TGC_SESSION env)",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		s, err := readSessionInput(args)
 		if err != nil {
 			return err
@@ -125,7 +125,7 @@ var authImportCmd = &cobra.Command{
 var authListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List profiles",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
@@ -149,7 +149,7 @@ var authLogoutCmd = &cobra.Command{
 	Use:   "logout [profile]",
 	Short: "Delete a profile and its session",
 	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		name := ProfileName()
 		if len(args) == 1 {
 			name = args[0]

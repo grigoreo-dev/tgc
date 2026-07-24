@@ -54,8 +54,8 @@ func TestDownloadAndVerify(t *testing.T) {
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), assetName)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/a.tgz", func(w http.ResponseWriter, r *http.Request) { w.Write(targz) })
-	mux.HandleFunc("/checksums.txt", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(checksums)) })
+	mux.HandleFunc("/a.tgz", func(w http.ResponseWriter, _ *http.Request) { w.Write(targz) })
+	mux.HandleFunc("/checksums.txt", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(checksums)) })
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
