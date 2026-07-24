@@ -48,9 +48,6 @@ linters:
         - name: unused-parameter
         - name: exported
       # package-comments intentionally omitted — see ST1000 rationale above.
-    gocritic:
-      disabled-checks:
-        - commentFormatting
   exclusions:
     rules:
       # Tests use throwaway writers/temp files where checking every error

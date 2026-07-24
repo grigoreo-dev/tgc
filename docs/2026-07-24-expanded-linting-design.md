@@ -115,11 +115,8 @@ linters:
         - name: unused-parameter
         - name: exported
       # package-comments intentionally omitted (see ST1000 rationale)
-    gocritic:
-      # commentFormatting wants "// nosec" but gosec only honors "//nosec"
-      # (no space) — disable this one check to keep the directives working.
-      disabled-checks:
-        - commentFormatting
+    # gosec suppressions use the `//#nosec` directive form, which gocritic's
+    # commentFormatting check already exempts — so no gocritic tweak is needed.
   exclusions:
     rules:
       - path: _test\.go

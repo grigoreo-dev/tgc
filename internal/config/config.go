@@ -161,7 +161,7 @@ func ResolveProfile(explicit string) (*Profile, error) {
 		return nil, err
 	}
 	p := &Profile{Name: name, Dir: dir, SessionPath: filepath.Join(dir, "session.db")}
-	if b, err := os.ReadFile(filepath.Join(dir, "type")); err == nil { //#nosec G304 -- dir is the resolved tgc config root, not user-controlled input
+	if b, err := os.ReadFile(filepath.Join(dir, "type")); err == nil { //#nosec G304 -- path derives from profile name; name validation tracked in tgc-tilf
 		p.Type = strings.TrimSpace(string(b))
 	}
 	return p, nil
