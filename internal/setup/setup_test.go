@@ -553,7 +553,7 @@ func TestRun_UnmarkedFishConfDSkipped(t *testing.T) {
 func TestRun_GeneratorError_SingleIOError(t *testing.T) {
 	e := testEnv(t, "bash")
 	binDir := filepath.Join(e.Home, "bin")
-	gen := func(shell string, w io.Writer) error {
+	gen := func(_ string, _ io.Writer) error {
 		return errors.New("gen boom")
 	}
 	_, err := Run(e, binDir, "bash", gen)

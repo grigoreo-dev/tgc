@@ -18,11 +18,13 @@ const releaseAPI = "https://api.github.com/repos/grigoreo-dev/tgc/releases/lates
 // ErrNoReleases means the repo has no published releases yet (HTTP 404).
 var ErrNoReleases = errors.New("no releases")
 
+// Asset is one downloadable file attached to a GitHub release.
 type Asset struct {
 	Name string `json:"name"`
 	URL  string `json:"browser_download_url"`
 }
 
+// Release is a GitHub release: its tag and downloadable assets.
 type Release struct {
 	Tag    string  `json:"tag_name"`
 	Assets []Asset `json:"assets"`

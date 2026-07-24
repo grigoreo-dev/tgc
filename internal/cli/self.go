@@ -24,7 +24,7 @@ var selfCheckCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check whether a newer tgc release is available",
 	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		res, err := selfupdate.Check(ctx)
@@ -48,7 +48,7 @@ var selfUpdateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update tgc to the latest release",
 	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		// Post-apply refreshes marked completion scripts after a successful
@@ -92,7 +92,7 @@ updates only the managed marker block / marked completion files.
 
 Use --remove to reverse setup (managed block and marked files only).`,
 	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		// pflag keeps parsed values across rootCmd.Execute in the same process
 		// (tests / rare reuse). Reset to defaults after this run so a later
 		// Execute without --remove does not inherit sticky state.

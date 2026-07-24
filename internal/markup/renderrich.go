@@ -264,8 +264,8 @@ func tlTypeName(v any) string {
 }
 
 // captionText renders a PageCaption's text (best-effort).
-func captionText(cap tg.PageCaption, c *richCtx) string {
-	return renderRichText(cap.Text, c)
+func captionText(caption tg.PageCaption, c *richCtx) string {
+	return renderRichText(caption.Text, c)
 }
 
 func heading(level int, text tg.RichTextClass, c *richCtx) string {
@@ -318,8 +318,8 @@ func renderPageBlock(b tg.PageBlockClass, c *richCtx) string {
 		return "```" + v.Language + "\n" + renderRichText(v.Text, c) + "\n```"
 	case *tg.PageBlockBlockquote:
 		out := "> " + renderRichText(v.Text, c)
-		if cap := renderRichText(v.Caption, c); cap != "" {
-			out += "\n> — " + cap
+		if caption := renderRichText(v.Caption, c); caption != "" {
+			out += "\n> — " + caption
 		}
 		return out
 	case *tg.PageBlockPullquote:

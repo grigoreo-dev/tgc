@@ -435,14 +435,14 @@ func largestPhotoSize(sizes []tg.PhotoSizeClass) (string, int) {
 				bestSize, bestType = ps.Size, ps.Type
 			}
 		case *tg.PhotoSizeProgressive:
-			max := 0
+			largest := 0
 			for _, n := range ps.Sizes {
-				if n > max {
-					max = n
+				if n > largest {
+					largest = n
 				}
 			}
-			if max >= bestSize {
-				bestSize, bestType = max, ps.Type
+			if largest >= bestSize {
+				bestSize, bestType = largest, ps.Type
 			}
 		}
 	}

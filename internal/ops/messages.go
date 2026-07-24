@@ -651,7 +651,7 @@ func collectMessages(res tg.MessagesMessagesClass, chatID int64, since time.Time
 
 // messageToMap renders a message per the tgc field contract. Senders are read
 // only from the users/chats attached to the API response (no extra resolves).
-func messageToMap(m *tg.Message, users map[int64]*tg.User, chats map[int64]tg.ChatClass, chatID int64) map[string]any {
+func messageToMap(m *tg.Message, users map[int64]*tg.User, _ map[int64]tg.ChatClass, chatID int64) map[string]any {
 	out := map[string]any{
 		"id":              m.ID,
 		"chat_id":         chatID,

@@ -22,7 +22,7 @@ func TestPostApplyHook_OnlyOnSuccessfulReplace(t *testing.T) {
 	// --- up-to-date: release tag equals current → no replace, no hook ---
 	t.Run("not_called_when_up_to_date", func(t *testing.T) {
 		restore := installUpdateSeams(t, updateSeams{
-			latest: func(ctx context.Context, c *http.Client) (*Release, error) {
+			latest: func(_ context.Context, _ *http.Client) (*Release, error) {
 				return &Release{Tag: "v1.0.0"}, nil
 			},
 		})
@@ -50,7 +50,7 @@ func TestPostApplyHook_OnlyOnSuccessfulReplace(t *testing.T) {
 	// --- no releases: ErrNoReleases → no replace, no hook ---
 	t.Run("not_called_when_no_releases", func(t *testing.T) {
 		restore := installUpdateSeams(t, updateSeams{
-			latest: func(ctx context.Context, c *http.Client) (*Release, error) {
+			latest: func(_ context.Context, _ *http.Client) (*Release, error) {
 				return nil, ErrNoReleases
 			},
 		})
@@ -75,10 +75,10 @@ func TestPostApplyHook_OnlyOnSuccessfulReplace(t *testing.T) {
 	// --- successful replace: hook runs, paths recorded ---
 	t.Run("called_after_successful_replace", func(t *testing.T) {
 		restore := installUpdateSeams(t, updateSeams{
-			latest: func(ctx context.Context, c *http.Client) (*Release, error) {
+			latest: func(_ context.Context, _ *http.Client) (*Release, error) {
 				return newerReleaseWithAsset(), nil
 			},
-			download: func(ctx context.Context, c *http.Client, asset *Asset, checksumsURL string) (string, func(), error) {
+			download: func(_ context.Context, _ *http.Client, _ *Asset, _ string) (string, func(), error) {
 				return "/tmp/fake-bin", func() {}, nil
 			},
 			replace: func(newBin string) error {
@@ -113,10 +113,10 @@ func TestPostApplyHook_OnlyOnSuccessfulReplace(t *testing.T) {
 	// --- hook error: Update still succeeds; CompletionsRefreshed empty ---
 	t.Run("hook_error_does_not_fail_update", func(t *testing.T) {
 		restore := installUpdateSeams(t, updateSeams{
-			latest: func(ctx context.Context, c *http.Client) (*Release, error) {
+			latest: func(_ context.Context, _ *http.Client) (*Release, error) {
 				return newerReleaseWithAsset(), nil
 			},
-			download: func(ctx context.Context, c *http.Client, asset *Asset, checksumsURL string) (string, func(), error) {
+			download: func(_ context.Context, _ *http.Client, _ *Asset, _ string) (string, func(), error) {
 				return "/tmp/fake-bin", func() {}, nil
 			},
 			replace: func(string) error { return nil },
@@ -145,10 +145,10 @@ func TestPostApplyHook_OnlyOnSuccessfulReplace(t *testing.T) {
 	// --- replace failure: hook must not run ---
 	t.Run("not_called_when_replace_fails", func(t *testing.T) {
 		restore := installUpdateSeams(t, updateSeams{
-			latest: func(ctx context.Context, c *http.Client) (*Release, error) {
+			latest: func(_ context.Context, _ *http.Client) (*Release, error) {
 				return newerReleaseWithAsset(), nil
 			},
-			download: func(ctx context.Context, c *http.Client, asset *Asset, checksumsURL string) (string, func(), error) {
+			download: func(_ context.Context, _ *http.Client, _ *Asset, _ string) (string, func(), error) {
 				return "/tmp/fake-bin", func() {}, nil
 			},
 			replace: func(string) error { return errors.New("permission denied") },

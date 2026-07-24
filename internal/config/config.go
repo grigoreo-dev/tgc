@@ -11,12 +11,14 @@ import (
 	"github.com/grigoreo-dev/tgc/internal/output"
 )
 
+// Config is the tgc global config (default profile + API credentials).
 type Config struct {
 	DefaultProfile string `toml:"default_profile"`
 	APIID          int    `toml:"api_id"`
 	APIHash        string `toml:"api_hash"`
 }
 
+// Profile is a resolved tgc account profile: its dirs, session path, and type.
 type Profile struct {
 	Name        string
 	Dir         string
@@ -51,6 +53,7 @@ func DirSource() (string, string) {
 
 func configPath() string { return filepath.Join(Dir(), "config.toml") }
 
+// Load reads the global config, returning defaults when absent.
 func Load() (*Config, error) {
 	var c Config
 	b, err := os.ReadFile(configPath())
@@ -164,10 +167,12 @@ func ResolveProfile(explicit string) (*Profile, error) {
 	return p, nil
 }
 
+// SetProfileType persists a profile's account type ("user"|"bot").
 func SetProfileType(p *Profile, t string) error {
 	return os.WriteFile(filepath.Join(p.Dir, "type"), []byte(t), 0o600)
 }
 
+// ListProfiles returns all profiles under the config root.
 func ListProfiles() ([]Profile, error) {
 	root := filepath.Join(Dir(), "profiles")
 	entries, err := os.ReadDir(root)
@@ -191,6 +196,7 @@ func ListProfiles() ([]Profile, error) {
 	return out, nil
 }
 
+// DeleteProfile removes a profile's directory and session.
 func DeleteProfile(name string) error {
 	if name == "" {
 		return output.Errf("bad_args", "profile name required")

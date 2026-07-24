@@ -49,7 +49,7 @@ func TestWriteCompletion_AtomicAndMarked(t *testing.T) {
 func TestWriteCompletion_GeneratorError(t *testing.T) {
 	e := testEnv(t, "bash")
 	path, _ := e.CompletionPath("bash")
-	gen := func(shell string, w io.Writer) error {
+	gen := func(_ string, _ io.Writer) error {
 		return errors.New("gen boom")
 	}
 	_, _, err := writeCompletion(path, "bash", gen)

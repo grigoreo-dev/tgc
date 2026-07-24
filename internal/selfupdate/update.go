@@ -11,6 +11,7 @@ import (
 	"github.com/grigoreo-dev/tgc/internal/version"
 )
 
+// CheckResult reports the outcome of a self-update check/apply.
 type CheckResult struct {
 	Current              string   `json:"current"`
 	Latest               string   `json:"latest"`
