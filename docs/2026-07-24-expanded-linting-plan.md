@@ -396,6 +396,12 @@ Add to `linters.enable` (after `unused`): `bodyclose`, `errorlint`, `gocritic`, 
       # package-comments intentionally omitted — see ST1000 rationale above.
 ```
 
+> **Fallback (from stress-test):** `exported` may surface a tail of exported
+> symbols beyond the ~9 in Task 3. If the tail exceeds ~15 doc-comments or hits
+> obviously-internal types, drop `exported` from this epic (keep
+> `redefines-builtin-id` + `unused-parameter`, which are unambiguous) and file
+> `exported` as a separate follow-up bead rather than bloating this epic.
+
 Add under `linters.exclusions.rules` (alongside the existing `_test.go` errcheck rule):
 
 ```yaml
@@ -450,3 +456,26 @@ git add -A && git commit -m "docs: note expanded lint profile" || echo "no doc c
 ## Task dependency order
 
 Task 1 → Task 2 → Task 3 → Task 4 → Task 5 → Task 6 (strictly sequential — Task 5 enables the linters only after Tasks 1-4 make the tree clean; Tasks 2/3 both touch `config.go`/`messages.go` so must not run in parallel).
+
+## Stress Test Results: expanded linting plan
+
+### Resolved Decisions
+- **G110 guard**: `io.LimitReader` bounds disk writes to 500 MiB+1 before abort — correct property (bounded write, not detect-after-write). 500 MiB is a safe ceiling vs the tens-of-MB real binary; no false positives.
+- **#nosec boundary**: all suppressions correct under today's trust model; per-site rationale comments name the trust assumption so future changes see the invalidated premise.
+- **G304 config.go:161**: uncovered a REAL path-traversal gap — profile name from `--profile`/`DefaultProfile` is joined into the profiles dir with no validation, so `../` escapes. Kept `#nosec` here (this epic is about linting), filed the actual fix as a separate P2 security bead (tgc-tilf).
+- **G304 completion.go**: genuine false positives (shell-name-derived paths, no user input) — `#nosec` is correct.
+- **revive/exported**: accepted with a fallback — if the doc-comment tail is large/noisy, split `exported` into its own bead.
+- **gocritic unlambda**: `writeCompletionScript` signature confirmed `func(string, io.Writer) error` = `setup.Generator`, so `return writeCompletionScript` compiles.
+- **test exclusions**: only errcheck + gosec G301/G306 in `_test.go`; masks nothing in production code.
+- **sequencing**: strictly sequential; Tasks 2/3 share files so must not parallelize.
+- **CI drift**: local v2.12.2 and CI pin v2.12 align; stable minor line adds no rules.
+
+### Changes Made
+- Added `exported` fallback note to the .golangci.yml config block in Task 5.
+
+### Deferred / Parking Lot
+- tgc-tilf: [security] validate profile name against path traversal (separate P2 bead).
+
+### Confidence Assessment
+- Overall: High
+- Areas of concern: none blocking; exported-tail size is the only open variable, mitigated by the documented fallback.
