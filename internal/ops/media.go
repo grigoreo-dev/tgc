@@ -479,6 +479,7 @@ func documentName(doc *tg.Document, msgID int) string {
 // directories with 0700 as needed.
 func resolveDest(outPath string, meta mediaMeta) (string, error) {
 	var dest string
+	//nolint:staticcheck // QF1002: default branch is branching logic (os.Stat/suffix checks), not a value match — a tagged switch on outPath would be less clear here.
 	switch {
 	case outPath == "":
 		dir := filepath.Join(downloadRoot(), fmt.Sprintf("%d", meta.fileID))

@@ -26,12 +26,13 @@ linters:
         - os.Remove
         - os.RemoveAll
     staticcheck:
-      # Keep the valuable SA correctness checks; drop opinionated style (ST*)
-      # and quick-fix (QF*) suggestions — tagged-switch and package-comment
-      # nudges that don't match this codebase's conventions.
       checks:
         - "all"
-        - "-QF1002"
+        # ST1000 (package-doc comments) is off project-wide: tgc is an
+        # application whose packages live under internal/ and are never
+        # published to pkg.go.dev, so per-package doc headers have no reader.
+        # QF1002 (tagged switch) stays ON — its single hit is silenced with a
+        # justified //nolint at internal/ops/media.go:resolveDest instead.
         - "-ST1000"
   exclusions:
     rules:
