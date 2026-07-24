@@ -219,7 +219,7 @@ func upsertRCFile(path, block string) (bool, error) {
 		return false, err
 	}
 	var content string
-	b, err := os.ReadFile(target)
+	b, err := os.ReadFile(target) //#nosec G304 -- target is a resolved shell RC path from the user's home, not arbitrary user input
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return false, err
@@ -246,7 +246,7 @@ func removeRCBlock(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	b, err := os.ReadFile(target)
+	b, err := os.ReadFile(target) //#nosec G304 -- target is a resolved shell RC path from the user's home, not arbitrary user input
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil

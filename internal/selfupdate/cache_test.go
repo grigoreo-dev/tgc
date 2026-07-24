@@ -82,7 +82,9 @@ func TestReadCacheCorrupt(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cachePath()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(cachePath(), []byte("{not json"), 0o600)
+	if err := os.WriteFile(cachePath(), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, ok := readCache(); ok {
 		t.Fatalf("readCache on corrupt file: ok=true, want false")
 	}
@@ -93,7 +95,9 @@ func TestStartupNotifyWarns(t *testing.T) {
 	old := version.Version
 	defer func() { version.Version = old }()
 	version.Version = "1.0.0"
-	WriteCache("v2.0.0")
+	if err := WriteCache("v2.0.0"); err != nil {
+		t.Fatal(err)
+	}
 
 	var buf bytes.Buffer
 	StartupNotify(&buf)
@@ -108,7 +112,9 @@ func TestStartupNotifyDisabled(t *testing.T) {
 	old := version.Version
 	defer func() { version.Version = old }()
 	version.Version = "1.0.0"
-	WriteCache("v2.0.0")
+	if err := WriteCache("v2.0.0"); err != nil {
+		t.Fatal(err)
+	}
 
 	var buf bytes.Buffer
 	StartupNotify(&buf)

@@ -40,7 +40,7 @@ func TestEnsureLocalGitignore(t *testing.T) {
 		t.Fatal(err)
 	}
 	config.EnsureLocalGitignore(local)
-	b, err := os.ReadFile(filepath.Join(local, ".gitignore"))
+	b, err := os.ReadFile(filepath.Join(local, ".gitignore")) //#nosec G304 -- test path under temp .tgc dir
 	if err != nil || string(b) != "*\n" {
 		t.Fatalf("gitignore want '*\\n', got %q err=%v", string(b), err)
 	}

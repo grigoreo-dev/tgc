@@ -49,7 +49,7 @@ func errCode(err error) string {
 
 func readFile(t *testing.T, path string) string {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //#nosec G304 -- test helper reads paths under the test temp dir
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}

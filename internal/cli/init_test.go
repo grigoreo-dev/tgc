@@ -43,7 +43,7 @@ func TestRunInitCreatesLocalTgc(t *testing.T) {
 	tgcDir := filepath.Join(proj, ".tgc")
 
 	// .gitignore = *
-	gi, err := os.ReadFile(filepath.Join(tgcDir, ".gitignore"))
+	gi, err := os.ReadFile(filepath.Join(tgcDir, ".gitignore")) //#nosec G304 -- test path under temp .tgc dir
 	if err != nil || string(gi) != "*\n" {
 		t.Fatalf(".gitignore want '*\\n', got %q err=%v", string(gi), err)
 	}
@@ -54,7 +54,7 @@ func TestRunInitCreatesLocalTgc(t *testing.T) {
 		APIID          int    `toml:"api_id"`
 		APIHash        string `toml:"api_hash"`
 	}
-	b, err := os.ReadFile(filepath.Join(tgcDir, "config.toml"))
+	b, err := os.ReadFile(filepath.Join(tgcDir, "config.toml")) //#nosec G304 -- test path under temp .tgc dir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestRunInitAdditiveNoClobber(t *testing.T) {
 	if _, err := runInit("other"); err != nil {
 		t.Fatal(err)
 	}
-	b, _ := os.ReadFile(filepath.Join(tgcDir, "config.toml"))
+	b, _ := os.ReadFile(filepath.Join(tgcDir, "config.toml")) //#nosec G304 -- test path under temp .tgc dir
 	var c struct {
 		DefaultProfile string `toml:"default_profile"`
 	}
@@ -159,7 +159,7 @@ func TestRunInitAtHomeUsesGlobalDir(t *testing.T) {
 		APIID          int    `toml:"api_id"`
 		APIHash        string `toml:"api_hash"`
 	}
-	b, err := os.ReadFile(filepath.Join(wantDir, "config.toml"))
+	b, err := os.ReadFile(filepath.Join(wantDir, "config.toml")) //#nosec G304 -- test path under temp .tgc dir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestRunInitAtHomeAdditiveNoClobber(t *testing.T) {
 		t.Fatalf("scope want global, got %v", res["scope"])
 	}
 
-	b, _ := os.ReadFile(filepath.Join(gdir, "config.toml"))
+	b, _ := os.ReadFile(filepath.Join(gdir, "config.toml")) //#nosec G304 -- test path under temp global config dir
 	var c struct {
 		DefaultProfile string `toml:"default_profile"`
 		APIID          int    `toml:"api_id"`

@@ -35,11 +35,11 @@ func WriteCache(latest string) error {
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return err
 	}
-	tmp.Close()
+	_ = tmp.Close()
 	return os.Rename(tmpName, cachePath())
 }
 

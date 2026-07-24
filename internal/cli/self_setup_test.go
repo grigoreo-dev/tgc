@@ -78,7 +78,7 @@ func TestSelfSetup_FishCreatesFilesAndOneJSONLine(t *testing.T) {
 	if _, err := os.Stat(comp); err != nil {
 		t.Fatalf("fish completions missing: %v", err)
 	}
-	body, err := os.ReadFile(comp)
+	body, err := os.ReadFile(comp) //#nosec G304 -- test path under temp home/completion dir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestSelfSetup_SkippedWarnsStderr(t *testing.T) {
 		t.Fatalf("Result.Skipped want non-empty, got %+v", res)
 	}
 	// Unmarked user file must be left intact.
-	body, err := os.ReadFile(comp)
+	body, err := os.ReadFile(comp) //#nosec G304 -- test path under temp home/completion dir
 	if err != nil {
 		t.Fatal(err)
 	}

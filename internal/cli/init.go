@@ -94,7 +94,7 @@ func runInit(profile string) (map[string]any, error) {
 	// Load existing config (if any) for additive merge.
 	cfgPath := filepath.Join(tgcDir, "config.toml")
 	var lc localConfig
-	if b, err := os.ReadFile(cfgPath); err == nil {
+	if b, err := os.ReadFile(cfgPath); err == nil { //#nosec G304 -- cfgPath is filepath.Join(tgcDir, "config.toml") under the project .tgc dir
 		_ = toml.Unmarshal(b, &lc) // best effort; empty on parse failure
 	}
 
@@ -125,7 +125,7 @@ func runInit(profile string) (map[string]any, error) {
 	defer os.Remove(tmpName)
 	_ = tmp.Chmod(0o600)
 	if err := toml.NewEncoder(tmp).Encode(&lc); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return nil, output.Errf("io_error", "cannot encode config: %v", err)
 	}
 	if err := tmp.Close(); err != nil {

@@ -40,9 +40,15 @@ func makeTarGz(t *testing.T, binName string, content []byte) []byte {
 	if err := tw.WriteHeader(hdr); err != nil {
 		t.Fatal(err)
 	}
-	tw.Write(content)
-	tw.Close()
-	gz.Close()
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return buf.Bytes()
 }
 
@@ -54,8 +60,8 @@ func TestDownloadAndVerify(t *testing.T) {
 	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), assetName)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/a.tgz", func(w http.ResponseWriter, _ *http.Request) { w.Write(targz) })
-	mux.HandleFunc("/checksums.txt", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(checksums)) })
+	mux.HandleFunc("/a.tgz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(targz) })
+	mux.HandleFunc("/checksums.txt", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(checksums)) })
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -65,7 +71,10 @@ func TestDownloadAndVerify(t *testing.T) {
 		t.Fatalf("downloadAndVerify err: %v", err)
 	}
 	defer cleanup()
-	got, _ := os.ReadFile(bin)
+	got, err := os.ReadFile(bin) //#nosec G304 -- bin is the extracted path from downloadAndVerify under a temp dir
+	if err != nil {
+		t.Fatalf("read extracted binary: %v", err)
+	}
 	if !bytes.Equal(got, content) {
 		t.Fatalf("extracted binary content mismatch")
 	}
@@ -74,14 +83,21 @@ func TestDownloadAndVerify(t *testing.T) {
 func TestReplaceRunningAtomic(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "app")
-	os.WriteFile(target, []byte("old"), 0o755)
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	newBin := filepath.Join(t.TempDir(), "new")
-	os.WriteFile(newBin, []byte("new"), 0o755)
+	if err := os.WriteFile(newBin, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := replaceFileAtomic(newBin, target); err != nil {
 		t.Fatalf("replaceFileAtomic err: %v", err)
 	}
-	got, _ := os.ReadFile(target)
+	got, err := os.ReadFile(target) //#nosec G304 -- target is under t.TempDir()
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
 	if string(got) != "new" {
 		t.Fatalf("target content = %q, want new", got)
 	}
@@ -100,8 +116,12 @@ func TestDownloadAndVerifyRejectsOversizedBinary(t *testing.T) {
 	if _, err := io.CopyN(tw, zeroReader{}, int64(big)); err != nil {
 		t.Fatal(err)
 	}
-	tw.Close()
-	gz.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
 	data := raw.Bytes()
 
 	sum := sha256.Sum256(data)

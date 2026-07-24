@@ -111,23 +111,23 @@ func downloadAndVerify(ctx context.Context, c *http.Client, asset *Asset, checks
 		// Zip-Slip guard: we ONLY ever write to tmpDir/tgc, never a traversed
 		// path. Do NOT "simplify" this to filepath.Join(tmpDir, hdr.Name).
 		if filepath.Base(hdr.Name) == "tgc" && hdr.Typeflag == tar.TypeReg {
-			f, err := os.OpenFile(binPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+			f, err := os.OpenFile(binPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755) //#nosec G302 G304 -- extracted CLI binary path is under our temp dir; must be executable
 			if err != nil {
 				cleanup()
 				return "", nil, err
 			}
 			n, err := io.Copy(f, io.LimitReader(tr, maxExtractedBinary+1))
 			if err != nil {
-				f.Close()
+				_ = f.Close()
 				cleanup()
 				return "", nil, err
 			}
 			if n > maxExtractedBinary {
-				f.Close()
+				_ = f.Close()
 				cleanup()
 				return "", nil, output.Errf("archive", "extracted binary exceeds %d bytes", maxExtractedBinary)
 			}
-			f.Close()
+			_ = f.Close()
 			found = true
 			break
 		}
@@ -151,25 +151,25 @@ func replaceFileAtomic(newBin, target string) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	src, err := os.Open(newBin)
+	src, err := os.Open(newBin) //#nosec G304 -- newBin is the extracted path under our temp dir from downloadAndVerify
 	if err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return err
 	}
 	defer src.Close()
 	if _, err := io.Copy(tmp, src); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return err
 	}
-	tmp.Close()
-	if err := os.Chmod(tmpName, 0o755); err != nil { //nosec G302 -- the CLI binary must be executable; 0600 would make it non-runnable
-		os.Remove(tmpName)
+	_ = tmp.Close()
+	if err := os.Chmod(tmpName, 0o755); err != nil { //#nosec G302 -- the CLI binary must be executable; 0600 would make it non-runnable
+		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := os.Rename(tmpName, target); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return output.Errf("permission_denied", "cannot replace %s; re-run install.sh or use sudo", target)
 	}
 	return nil

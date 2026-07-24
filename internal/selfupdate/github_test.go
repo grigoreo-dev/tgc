@@ -34,7 +34,7 @@ func TestLatestRelease(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer Tok" {
 			t.Errorf("Authorization = %q, want Bearer Tok", got)
 		}
-		w.Write([]byte(`{"tag_name":"v1.3.0","assets":[{"name":"tgc_1.3.0_darwin_arm64.tar.gz","browser_download_url":"http://x/a.tgz"}]}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v1.3.0","assets":[{"name":"tgc_1.3.0_darwin_arm64.tar.gz","browser_download_url":"http://x/a.tgz"}]}`))
 	}))
 	defer srv.Close()
 

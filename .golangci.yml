@@ -11,6 +11,14 @@ linters:
     - misspell
     - staticcheck
     - unused
+    - bodyclose
+    - errorlint
+    - gocritic
+    - gosec
+    - prealloc
+    - revive
+    - unconvert
+    - wastedassign
   settings:
     errcheck:
       # Best-effort cleanup, deferred closes, and stderr diagnostics are
@@ -34,6 +42,15 @@ linters:
         # QF1002 (tagged switch) stays ON — its single hit is silenced with a
         # justified //nolint at internal/ops/media.go:resolveDest instead.
         - "-ST1000"
+    revive:
+      rules:
+        - name: redefines-builtin-id
+        - name: unused-parameter
+        - name: exported
+      # package-comments intentionally omitted — see ST1000 rationale above.
+    gocritic:
+      disabled-checks:
+        - commentFormatting
   exclusions:
     rules:
       # Tests use throwaway writers/temp files where checking every error
@@ -41,3 +58,8 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      # gosec perms findings on synthetic test fixtures carry no signal.
+      - path: _test\.go
+        text: "G301|G306"
+        linters:
+          - gosec

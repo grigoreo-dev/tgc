@@ -12,7 +12,7 @@ import (
 
 // Decode reads a TL-encoded tg.RichMessage from path.
 func Decode(path string) (tg.RichMessage, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //#nosec G304 -- path is a caller-supplied fixture/golden path for tests and demos, not untrusted input
 	if err != nil {
 		return tg.RichMessage{}, fmt.Errorf("read fixture %s: %w", path, err)
 	}
@@ -27,7 +27,7 @@ func Decode(path string) (tg.RichMessage, error) {
 
 // LoadGolden reads a golden Markdown file, preserving exact bytes as a string.
 func LoadGolden(path string) (string, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //#nosec G304 -- path is a caller-supplied fixture/golden path for tests and demos, not untrusted input
 	if err != nil {
 		return "", fmt.Errorf("read golden %s: %w", path, err)
 	}
