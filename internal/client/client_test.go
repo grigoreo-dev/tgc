@@ -36,6 +36,7 @@ func TestWrapErrPassthroughAndNil(t *testing.T) {
 		t.Fatal("nil must stay nil")
 	}
 	orig := errors.New("some transport failure")
+	//nolint:errorlint // WrapErr's contract is pointer-identity passthrough for unmapped errors; errors.Is would mask a wrap regression here
 	if got := WrapErr(orig); got != orig {
 		t.Fatalf("unmapped error must pass through unchanged, got %v", got)
 	}

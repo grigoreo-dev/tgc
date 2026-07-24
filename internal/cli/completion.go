@@ -46,9 +46,7 @@ func writeCompletionScript(shell string, w io.Writer) error {
 // generation on rootCmd. Package-local; Task 4 reuses it from this package
 // when wiring the self-update refresh hook (selfupdate stays free of cobra/cli).
 func completionGenerator() setup.Generator {
-	return func(shell string, w io.Writer) error {
-		return writeCompletionScript(shell, w)
-	}
+	return writeCompletionScript
 }
 
 func init() {
