@@ -18,6 +18,10 @@ import (
 	"github.com/grigoreo-dev/tgc/internal/output"
 )
 
+// maxExtractedBinary bounds the extracted tgc binary to defend against a
+// decompression bomb: a small .tar.gz that expands to an enormous file.
+const maxExtractedBinary = 500 << 20 // 500 MiB
+
 func assetFor(rel *Release, goos, goarch string) (*Asset, error) {
 	want := fmt.Sprintf("%s_%s", goos, goarch)
 	for i := range rel.Assets {
@@ -112,10 +116,16 @@ func downloadAndVerify(ctx context.Context, c *http.Client, asset *Asset, checks
 				cleanup()
 				return "", nil, err
 			}
-			if _, err := io.Copy(f, tr); err != nil {
+			n, err := io.Copy(f, io.LimitReader(tr, maxExtractedBinary+1))
+			if err != nil {
 				f.Close()
 				cleanup()
 				return "", nil, err
+			}
+			if n > maxExtractedBinary {
+				f.Close()
+				cleanup()
+				return "", nil, output.Errf("archive", "extracted binary exceeds %d bytes", maxExtractedBinary)
 			}
 			f.Close()
 			found = true

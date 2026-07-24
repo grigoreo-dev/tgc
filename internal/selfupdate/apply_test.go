@@ -8,10 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -83,4 +85,55 @@ func TestReplaceRunningAtomic(t *testing.T) {
 	if string(got) != "new" {
 		t.Fatalf("target content = %q, want new", got)
 	}
+}
+
+func TestDownloadAndVerifyRejectsOversizedBinary(t *testing.T) {
+	// Build a tar.gz whose "tgc" member exceeds the extraction cap.
+	var raw bytes.Buffer
+	gz := gzip.NewWriter(&raw)
+	tw := tar.NewWriter(gz)
+	big := maxExtractedBinary + 1024
+	if err := tw.WriteHeader(&tar.Header{Name: "tgc", Mode: 0o755, Size: int64(big), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	// Stream zeros without allocating `big` bytes at once.
+	if _, err := io.CopyN(tw, zeroReader{}, int64(big)); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	gz.Close()
+	data := raw.Bytes()
+
+	sum := sha256.Sum256(data)
+	checksums := []byte(hex.EncodeToString(sum[:]) + "  bomb_linux_amd64.tar.gz\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "checksums.txt") {
+			_, _ = w.Write(checksums)
+			return
+		}
+		_, _ = w.Write(data)
+	}))
+	defer srv.Close()
+
+	asset := &Asset{Name: "bomb_linux_amd64.tar.gz", URL: srv.URL + "/a.tgz"}
+	_, cleanup, err := downloadAndVerify(context.Background(), srv.Client(), asset, srv.URL+"/checksums.txt")
+	if cleanup != nil {
+		cleanup()
+	}
+	if err == nil {
+		t.Fatal("expected archive error for oversized binary, got nil")
+	}
+	if !strings.Contains(err.Error(), "archive") {
+		t.Fatalf("expected archive error, got %v", err)
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }
