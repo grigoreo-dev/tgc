@@ -65,15 +65,8 @@ func ValidateSearchOpts(o SearchOpts) error {
 
 // peerRow projects a Peer into a tagged search-output row (no AccessHash).
 func peerRow(p resolve.Peer) map[string]any {
-	row := map[string]any{
-		"result": "chat",
-		"id":     p.ID,
-		"type":   p.Type,
-		"title":  p.Title,
-	}
-	if p.Username != "" {
-		row["username"] = p.Username
-	}
+	row := p.OutputMap()
+	row["result"] = "chat"
 	return row
 }
 

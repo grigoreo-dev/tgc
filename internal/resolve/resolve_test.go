@@ -82,3 +82,40 @@ func TestDialogCacheTTL(t *testing.T) {
 		t.Fatal("expired cache (ttl=0) must miss")
 	}
 }
+
+func TestOutputMapWithUsername(t *testing.T) {
+	p := Peer{ID: 42, AccessHash: 999, Type: "user", Title: "Anna", Username: "anna"}
+	m := p.OutputMap()
+	if m["id"] != int64(42) || m["type"] != "user" || m["title"] != "Anna" || m["username"] != "anna" {
+		t.Fatalf("unexpected map: %+v", m)
+	}
+	if _, ok := m["AccessHash"]; ok {
+		t.Fatal("AccessHash must not appear in OutputMap")
+	}
+	if _, ok := m["access_hash"]; ok {
+		t.Fatal("access_hash must not appear in OutputMap")
+	}
+	if len(m) != 4 {
+		t.Fatalf("want exactly id/type/title/username, got %d keys: %+v", len(m), m)
+	}
+}
+
+func TestOutputMapEmptyUsername(t *testing.T) {
+	p := Peer{ID: 1, AccessHash: 123, Type: "group", Title: "G"}
+	m := p.OutputMap()
+	if m["id"] != int64(1) || m["type"] != "group" || m["title"] != "G" {
+		t.Fatalf("unexpected map: %+v", m)
+	}
+	if _, ok := m["username"]; ok {
+		t.Fatal("empty username must be omitted")
+	}
+	if _, ok := m["AccessHash"]; ok {
+		t.Fatal("AccessHash must not appear in OutputMap")
+	}
+	if _, ok := m["access_hash"]; ok {
+		t.Fatal("access_hash must not appear in OutputMap")
+	}
+	if len(m) != 3 {
+		t.Fatalf("want exactly id/type/title, got %d keys: %+v", len(m), m)
+	}
+}

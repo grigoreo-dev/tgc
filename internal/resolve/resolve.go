@@ -25,6 +25,20 @@ type Peer struct {
 	Username   string `json:"username,omitempty"`
 }
 
+// OutputMap returns a safe public projection of Peer for CLI/JSON output.
+// AccessHash is never included; username is omitted when empty.
+func (p Peer) OutputMap() map[string]any {
+	m := map[string]any{
+		"id":    p.ID,
+		"type":  p.Type,
+		"title": p.Title,
+	}
+	if p.Username != "" {
+		m["username"] = p.Username
+	}
+	return m
+}
+
 var phoneRe = regexp.MustCompile(`^\+[0-9]{7,15}$`)
 
 // Classify determines the selector kind: self, id, username, phone or name.
