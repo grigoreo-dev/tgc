@@ -72,6 +72,42 @@ func TestPrettyNoColorWhenNotTTY(t *testing.T) {
 	}
 }
 
+func TestPrettyMapOmitsNilKeepsFalseZeroEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	restore := SwapStdout(&buf)
+	defer func() { restore(); SetPretty(false) }()
+	SetPretty(true)
+
+	Emit(map[string]any{
+		"flag":  false,
+		"count": 0,
+		"name":  "",
+		"gone":  nil,
+	})
+
+	got := buf.String()
+	if strings.Contains(got, "gone") {
+		t.Fatalf("nil key must be omitted: %q", got)
+	}
+	if !strings.Contains(got, "flag: false") {
+		t.Fatalf("false must be retained: %q", got)
+	}
+	if !strings.Contains(got, "count: 0") {
+		t.Fatalf("zero must be retained: %q", got)
+	}
+	if !strings.Contains(got, "name:") {
+		t.Fatalf("empty string key must be retained: %q", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "name:") {
+			rest := strings.TrimPrefix(line, "name:")
+			if strings.TrimSpace(rest) != "" {
+				t.Fatalf("empty string must render empty value: %q", line)
+			}
+		}
+	}
+}
+
 func TestErrfProducesStructuredError(t *testing.T) {
 	err := Errf("flood_wait", "wait %d seconds", 42)
 	var e *Error

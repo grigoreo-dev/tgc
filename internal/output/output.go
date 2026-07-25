@@ -101,7 +101,10 @@ func renderPretty(v any) string {
 	switch t := v.(type) {
 	case map[string]any:
 		keys := make([]string, 0, len(t))
-		for k := range t {
+		for k, v := range t {
+			if v == nil {
+				continue
+			}
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
