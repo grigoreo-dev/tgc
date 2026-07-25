@@ -30,7 +30,11 @@ var chatsCmd = &cobra.Command{
 			return err
 		}
 		for _, p := range peers {
-			output.Emit(p)
+			if Pretty() {
+				output.Emit(p.OutputMap())
+			} else {
+				output.Emit(p)
+			}
 		}
 		return nil
 	},
