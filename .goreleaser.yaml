@@ -28,5 +28,9 @@ release:
   github:
     owner: grigoreo-dev
     name: tgc
+  draft: true
+  use_existing_draft: true
+  replace_existing_artifacts: true
+  mode: keep-existing
 changelog:
-  use: github
+  disable: true
