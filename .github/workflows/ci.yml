@@ -32,3 +32,12 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12
+  conventional-commit-title:
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'release-please[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Conventional Commit title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s' "$TITLE" | grep -Eq '^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?!: .+|^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?: .+'

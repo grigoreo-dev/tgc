@@ -58,3 +58,9 @@ grep -F 'use_existing_draft: true' "$goreleaser" >/dev/null
 grep -F 'replace_existing_artifacts: true' "$goreleaser" >/dev/null
 grep -F 'mode: keep-existing' "$goreleaser" >/dev/null
 grep -F 'disable: true' "$goreleaser" >/dev/null
+
+ci=.github/workflows/ci.yml
+grep -F 'conventional-commit-title:' "$ci" >/dev/null
+grep -F 'release-please[bot]' "$ci" >/dev/null
+# Needle matches the workflow run-step ERE (single-backslash scope group).
+grep -F '^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?!:' "$ci" >/dev/null
