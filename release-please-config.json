@@ -4,6 +4,7 @@
       "release-type": "simple",
       "component": "tgc",
       "include-v-in-tag": true,
+      "include-component-in-tag": false,
       "tag-separator": "",
       "bump-minor-pre-major": true,
       "skip-github-release": true

@@ -12,6 +12,7 @@ test -f "$changelog"
 grep -F '"release-type": "simple"' "$config" >/dev/null
 grep -F '"tag-separator": ""' "$config" >/dev/null
 grep -F '"include-v-in-tag": true' "$config" >/dev/null
+grep -F '"include-component-in-tag": false' "$config" >/dev/null
 grep -F '"bump-minor-pre-major": true' "$config" >/dev/null
 grep -F '"skip-github-release": true' "$config" >/dev/null
 grep -F '".": "0.1.1"' "$manifest" >/dev/null
