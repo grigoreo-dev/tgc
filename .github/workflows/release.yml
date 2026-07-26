@@ -61,7 +61,10 @@ jobs:
       - run: shellcheck install.sh
 
   release-please:
-    if: github.event_name == 'push'
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      needs.verify.result == 'success'
     needs: verify
     runs-on: ubuntu-latest
     outputs:
