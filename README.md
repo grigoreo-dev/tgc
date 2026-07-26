@@ -312,13 +312,14 @@ Release versions and `CHANGELOG.md` are generated from
 [Conventional Commits](https://www.conventionalcommits.org/). Use squash merge
 and give ordinary PRs a title such as `fix: handle empty chat`,
 `feat: add search`, or `feat(cli)!: change the output contract`. CI rejects
-other titles on human PRs (`conventional-commit-title`); Release Please bot
-PRs skip that job.
+other titles (`conventional-commit-title`). Release Please opens a **Release PR**
+whose generated title (for example `chore(main): release 0.2.0`) is
+Conventional-Commit-compatible, so that check must pass on the Release PR as
+well.
 
 After releasable commits reach `main`, [Release Please](https://github.com/googleapis/release-please)
-opens or updates a **Release PR** with the next version and changelog. Review
-that PR, then merge it when the release is ready — do not create release tags
-by hand.
+opens or updates that **Release PR** with the next version and changelog. Review
+it, then merge when the release is ready — do not create release tags by hand.
 
 On merge of the Release PR, the release workflow:
 
@@ -349,12 +350,10 @@ an automatic consequence of a breaking-change commit.
 2. **Required checks on `main`** — branch protection or ruleset: require status
    checks before merge; include at least `test`, `lint`, and
    `conventional-commit-title`; prefer requiring branches to be up to date.
-3. **Skipped title job on Release Please PRs** — `conventional-commit-title`
-   is skipped for `release-please[bot]` (GitHub shows **Skipped**, not Failed).
-   Confirm the protection/ruleset treats Skipped as non-blocking for that
-   check, or add an automation exemption / ruleset path that does not block
-   bot Release PRs solely because the title job was skipped. Verify once on a
-   live Release Please PR before relying on the merge button.
+   With the built-in `GITHUB_TOKEN`, Release Please PRs are opened by
+   `github-actions[bot]`, so `conventional-commit-title` runs and must pass
+   (the generated title is Conventional-Commit-compatible). Treat Release PRs
+   like any other PR for required checks; do not rely on a Skipped title job.
 
 Local release-config contract (no credentials, no publish):
 

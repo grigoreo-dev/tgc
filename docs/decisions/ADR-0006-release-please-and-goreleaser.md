@@ -71,9 +71,15 @@ does not ship an empty release.
   manually pushing a tag.
 - Ordinary PRs must use validated Conventional Commit titles and squash merge so
   `main` history drives versioning and changelog entries.
-- Repository administrators must enable squash merge and required CI checks, and
-  confirm that a **Skipped** `conventional-commit-title` on Release Please bot
-  PRs does not block merge (settings/rulesets; not workflow YAML).
+- With the built-in `GITHUB_TOKEN`, Release Please opens the Release PR as
+  `github-actions[bot]`. The configured group title pattern yields a
+  Conventional-Commit-compatible title (for example `chore(main): release
+  X.Y.Z`), so `conventional-commit-title` runs and must pass; required checks
+  apply to Release PRs like any other PR. Do not assume that job is Skipped or
+  that rulesets must treat Skipped as non-blocking for merge.
+- Repository administrators must enable squash merge and required CI checks
+  (`test`, `lint`, `conventional-commit-title`) on `main` (settings/rulesets;
+  not workflow YAML).
 - The first automated release is based on `v0.1.1` and benefits from a dry-run
   review of accumulated commits before relying on production publish.
 - A failed artifact publication is retried against the same tag and **draft**

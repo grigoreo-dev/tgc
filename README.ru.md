@@ -317,13 +317,15 @@ JSONL в stdout, структурированные ошибки в stderr. Из
 [Conventional Commits](https://www.conventionalcommits.org/). Используйте
 squash merge и Conventional Commit в заголовке обычного PR:
 `fix: handle empty chat`, `feat: add search` или
-`feat(cli)!: change the output contract`. CI отклоняет другие заголовки на
-человеческих PR (`conventional-commit-title`); PR бота Release Please эту
-проверку пропускают.
+`feat(cli)!: change the output contract`. CI отклоняет другие заголовки
+(`conventional-commit-title`). Release Please открывает **Release PR** с
+сгенерированным заголовком (например `chore(main): release 0.2.0`), который
+совместим с Conventional Commits, поэтому эта проверка должна пройти и на
+Release PR.
 
 После появления релизных коммитов в `main` [Release Please](https://github.com/googleapis/release-please)
-создаёт или обновляет **Release PR** с очередной версией и changelog. Проверьте
-этот PR и влейте его, когда релиз готов — вручную теги релиза не создавайте.
+создаёт или обновляет этот **Release PR** с очередной версией и changelog.
+Проверьте его и влейте, когда релиз готов — вручную теги релиза не создавайте.
 
 После merge Release PR workflow релиза:
 
@@ -357,14 +359,11 @@ workflow** и укажите существующий `tag_name` (наприме
 2. **Обязательные проверки на `main`** — branch protection или ruleset:
    требовать прохождение status checks перед merge; как минимум `test`,
    `lint` и `conventional-commit-title`; желательно «require branches to be
-   up to date».
-3. **Пропуск title-job на PR Release Please** — `conventional-commit-title`
-   пропускается для `release-please[bot]` (в GitHub статус **Skipped**, не
-   Failed). Убедитесь, что protection/ruleset считает Skipped
-   неблокирующим для этой проверки, либо настройте exemption для автоматики /
-   ruleset, который не блокирует bot Release PR только из‑за пропуска title
-   job. Один раз проверьте на живом Release Please PR, что кнопка merge не
-   заблокирована только из‑за skipped check.
+   up to date». При встроенном `GITHUB_TOKEN` Release Please открывает PR от
+   `github-actions[bot]`, поэтому `conventional-commit-title` выполняется и
+   должна пройти (сгенерированный заголовок совместим с Conventional Commits).
+   Относитесь к Release PR как к любому другому PR по required checks; не
+   рассчитывайте на Skipped у title job.
 
 Локальная проверка контракта релиза (без credentials и без публикации):
 
