@@ -327,7 +327,8 @@ squash merge и Conventional Commit в заголовке обычного PR:
 
 После merge Release PR workflow релиза:
 
-1. Прогоняет build, vet, test и shellcheck для `install.sh` (`verify`).
+1. Прогоняет build, vet, test и shellcheck для `install.sh` (`verify`) на
+   merge-коммите в `main`.
 2. Через Release Please создаёт git-тег `vX.Y.Z` и **черновик** (draft) GitHub
    Release (тело/заметки из сгенерированного changelog).
 3. Запускает GoReleaser на этом теге: прикрепляет архивы и `checksums.txt` к
@@ -335,9 +336,12 @@ squash merge и Conventional Commit в заголовке обычного PR:
 4. Публикует релиз командой `gh release edit … --draft=false` только после
    успешной загрузки ассетов.
 
-Чтобы пересобрать ассеты для существующего draft без повторного запуска
-Release Please, откройте **Actions → Release → Run workflow** и укажите
-существующий `tag_name` (например `v0.2.0`).
+Чтобы пересобрать ассеты для существующего draft, который **ещё не опубликован**,
+без повторного запуска Release Please, откройте **Actions → Release → Run
+workflow** и укажите существующий `tag_name` (например `v0.2.0`). Этот путь
+проверяет тег, делает checkout **этого тега** для `verify` и GoReleaser, затем
+снова публикует тот же draft после успешной загрузки ассетов. Для уже
+опубликованных релизов этот путь не используйте.
 
 Пока tgc ниже `v1.0.0`, breaking changes выпускаются как следующая версия
 `0.x.0` (`bump-minor-pre-major`). **Переход на `v1.0.0` — отдельное решение

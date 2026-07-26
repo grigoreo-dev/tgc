@@ -16,6 +16,14 @@ grep -F '"include-component-in-tag": false' "$config" >/dev/null
 grep -F '"bump-minor-pre-major": true' "$config" >/dev/null
 grep -F '"draft": true' "$config" >/dev/null
 grep -F '"force-tag-creation": true' "$config" >/dev/null
+# Component field forces component-scoped PR branches; keep componentless vX.Y.Z tags/branches.
+if grep -Eq '"component"[[:space:]]*:' "$config"; then
+  echo '"component" must not be set (use componentless root package for plain vX.Y.Z)' >&2
+  exit 1
+fi
+# Grouped manifest PR titles default without ${version}; include it so merge can parse the release.
+# shellcheck disable=SC2016 # literal ${...} tokens in Release Please title pattern
+grep -F '"group-pull-request-title-pattern": "chore${scope}: release${component} ${version}"' "$config" >/dev/null
 if grep -Fq 'skip-github-release' "$config"; then
   echo "skip-github-release must not be set (blocks tags/releases; see release-please#1561)" >&2
   exit 1
@@ -40,11 +48,33 @@ if grep -Fq 'skip-github-release' "$workflow"; then
   echo "skip-github-release must not appear in release workflow" >&2
   exit 1
 fi
+# Serialize rapid main pushes; never cancel an in-flight publish.
+grep -F 'concurrency:' "$workflow" >/dev/null
+grep -F 'cancel-in-progress: false' "$workflow" >/dev/null
 grep -F 'workflow_dispatch:' "$workflow" >/dev/null
 grep -F 'tag_name:' "$workflow" >/dev/null
 grep -F '  validate-retry:' "$workflow" >/dev/null
 grep -F '^v[0-9]+\.[0-9]+\.[0-9]+$' "$workflow" >/dev/null
 grep -F '  verify:' "$workflow" >/dev/null
+# Dispatch tag must pass validate-retry before verify; never shell-expand raw inputs.tag_name.
+grep -F 'needs: [validate-retry]' "$workflow" >/dev/null
+grep -F 'needs.validate-retry.result == '\''success'\''' "$workflow" >/dev/null
+# shellcheck disable=SC2016 # literal GitHub Actions expression, not shell expansion
+grep -F 'ref: ${{ needs.validate-retry.outputs.tag_name || github.sha }}' "$workflow" >/dev/null
+# Raw inputs.tag_name may only feed the validate-retry env gate (never shell run:).
+tag_input_lines=$(grep -n 'inputs\.tag_name' "$workflow" || true)
+if [ -z "$tag_input_lines" ]; then
+  echo "validate-retry must read inputs.tag_name via env" >&2
+  exit 1
+fi
+if printf '%s\n' "$tag_input_lines" | grep -vE 'TAG: \$\{\{ inputs\.tag_name \}\}'; then
+  echo "inputs.tag_name must only appear as validate-retry env TAG; use outputs elsewhere" >&2
+  exit 1
+fi
+if [ "$(printf '%s\n' "$tag_input_lines" | wc -l)" -ne 1 ]; then
+  echo "inputs.tag_name must appear exactly once (validate-retry env)" >&2
+  exit 1
+fi
 grep -F 'needs: verify' "$workflow" >/dev/null
 grep -F 'googleapis/release-please-action@v5' "$workflow" >/dev/null
 grep -F 'release_created:' "$workflow" >/dev/null
@@ -84,8 +114,11 @@ grep -F 'GoReleaser' README.md >/dev/null
 grep -F 'v1.0.0' README.md >/dev/null
 grep -F 'squash' README.md >/dev/null
 grep -F 'conventional-commit-title' README.md >/dev/null
+# Retry is only for an existing draft that is not yet published.
+grep -F 'not yet published' README.md >/dev/null
 grep -F 'draft' README.ru.md >/dev/null
 grep -F 'GoReleaser' README.ru.md >/dev/null
 grep -F 'v1.0.0' README.ru.md >/dev/null
 grep -F 'squash' README.ru.md >/dev/null
 grep -F 'conventional-commit-title' README.ru.md >/dev/null
+grep -F 'ещё не опубликован' README.ru.md >/dev/null

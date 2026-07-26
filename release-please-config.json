@@ -1,8 +1,8 @@
 {
+  "group-pull-request-title-pattern": "chore${scope}: release${component} ${version}",
   "packages": {
     ".": {
       "release-type": "simple",
-      "component": "tgc",
       "include-v-in-tag": true,
       "include-component-in-tag": false,
       "tag-separator": "",

@@ -4,19 +4,19 @@
 
 **Goal:** Automate pre-1.0 SemVer selection and `CHANGELOG.md` maintenance from Conventional Commits, while a reviewed Release PR triggers a GoReleaser-published tgc release in one GitHub Actions workflow.
 
-**Architecture:** `.github/workflows/release.yml` verifies every push to `main`, then runs Release Please; its outputs conditionally start a dependent GoReleaser job in the same workflow run. Release Please owns the Release PR, version manifest, changelog, and tag, while GoReleaser exclusively creates the draft GitHub Release and uploads binaries and checksums. A CI PR-title job guarantees that squash-merged commits provide valid Conventional Commit input.
+**Architecture:** `.github/workflows/release.yml` verifies every push to `main`, then runs Release Please; its outputs conditionally start a dependent GoReleaser job in the same workflow run. Release Please owns the Release PR, version manifest, changelog, tag, and **draft** GitHub Release; GoReleaser attaches binaries and checksums to that draft; the workflow publishes with `gh release edit --draft=false`. A CI PR-title job guarantees that squash-merged commits provide valid Conventional Commit input.
 
 **Tech Stack:** GitHub Actions, `googleapis/release-please-action`, Release Please manifest JSON, GoReleaser v2, Go 1.25, shellcheck, `go test`.
 
 ## Global Constraints
 
 - The single workflow is `.github/workflows/release.yml`; it triggers only from pushes to `main`, not tag pushes.
-- Release Please must use manifest mode, a `v` tag prefix, `skip-github-release: true`, and `bump-minor-pre-major: true`.
+- Release Please must use manifest mode, a `v` tag prefix, `draft: true`, `force-tag-creation: true`, and `bump-minor-pre-major: true`. Do **not** set `skip-github-release` (blocks tags; release-please#1561). Root package is componentless (no `"component"` field).
 - `0.1.1` is the initial release baseline; `feat!` and `BREAKING CHANGE` stay in the `0.x.0` minor stream until an explicit `release-as: 1.0.0` decision.
 - `CHANGELOG.md` is generated and updated by Release Please; do not hand-edit future release sections in feature PRs.
 - Ordinary PRs must have Conventional Commit titles and use squash merge; the generated Release PR is exempt from title validation.
 - Use only the built-in `GITHUB_TOKEN` with `contents: write` and `pull-requests: write`; do not introduce a PAT or expose Telegram/configuration secrets.
-- GoReleaser is the sole GitHub Release and asset publisher; upload to a draft first and support retrying the same tag.
+- Release Please creates the draft GitHub Release; GoReleaser attaches assets with retry-safe replace; workflow publishes only after assets succeed.
 
 ---
 
@@ -45,7 +45,7 @@
 
 **Acceptance Criteria:**
 - Release Please treats `0.1.1` as the root component's last release and uses `v`-prefixed tags.
-- Breaking commits below `1.0.0` produce a minor release, and Release Please does not create a GitHub Release.
+- Breaking commits below `1.0.0` produce a minor release; Release Please creates a **draft** GitHub Release (not a published one).
 - `CHANGELOG.md` records `0.1.0` and `0.1.1` with their existing release URLs.
 - The validation script rejects a missing baseline, incorrect pre-major policy, missing GitHub Release skip, or a changelog without both historical headings.
 
@@ -95,14 +95,16 @@ Create `release-please-config.json`:
 
 ```json
 {
+  "group-pull-request-title-pattern": "chore${scope}: release${component} ${version}",
   "packages": {
     ".": {
       "release-type": "simple",
-      "component": "tgc",
       "include-v-in-tag": true,
+      "include-component-in-tag": false,
       "tag-separator": "",
       "bump-minor-pre-major": true,
-      "skip-github-release": true
+      "draft": true,
+      "force-tag-creation": true
     }
   }
 }
@@ -287,9 +289,9 @@ changelog:
 
 - [ ] **Step 5: Verify the release contracts**
 
-Run: `sh scripts/check-release-config.sh && docker run --rm -v "$PWD":/work -w /work goreleaser/goreleaser:v2 check --config .goreleaser.yaml`
+Run: `sh scripts/check-release-config.sh && docker run --rm -v "$PWD":/work -w /work goreleaser/goreleaser:v2.12.7 check --config .goreleaser.yaml`
 
-Expected: exit 0. The configuration checker prints nothing; the GoReleaser v2 container reports a valid configuration.
+Expected: exit 0. The configuration checker prints nothing; the GoReleaser `v2.12.7` container reports a valid configuration. Do not use the floating image tag `goreleaser/goreleaser:v2` (not a published image).
 
 - [ ] **Step 6: Commit the unified pipeline**
 
@@ -410,7 +412,7 @@ Add this subsection under `## Contributing`:
 
 Release versions and `CHANGELOG.md` are generated from [Conventional Commits](https://www.conventionalcommits.org/). Use squash merge and give ordinary PRs a title such as `fix: handle empty chat`, `feat: add search`, or `feat(cli)!: change the output contract`.
 
-After releasable commits reach `main`, Release Please opens or updates a Release PR with the next version and changelog. Review that PR, then merge it when the release is ready. The workflow creates the `vX.Y.Z` tag and GoReleaser publishes the archives and `checksums.txt`; do not create release tags manually.
+After releasable commits reach `main`, Release Please opens or updates a Release PR with the next version and changelog. Review that PR, then merge it when the release is ready. Release Please creates the `vX.Y.Z` tag and a draft GitHub Release; GoReleaser attaches archives and `checksums.txt`; the workflow publishes with `gh release edit --draft=false`. Do not create release tags manually.
 
 While tgc is below `v1.0.0`, breaking changes release the next `0.x.0` version. `v1.0.0` is an explicit maintainer decision, not an automatic consequence of a breaking-change commit.
 ```
@@ -424,7 +426,7 @@ Add this subsection under the Russian contributing section:
 
 Версия релиза и `CHANGELOG.md` формируются из [Conventional Commits](https://www.conventionalcommits.org/). Используйте squash merge и Conventional Commit в заголовке обычного PR: `fix: handle empty chat`, `feat: add search` или `feat(cli)!: change the output contract`.
 
-После появления релизных коммитов в `main` Release Please создаёт или обновляет Release PR с очередной версией и changelog. Проверьте этот PR и влейте его, когда релиз готов. Workflow сам создаёт тег `vX.Y.Z`, а GoReleaser публикует архивы и `checksums.txt`; вручную теги релиза не создавайте.
+После появления релизных коммитов в `main` Release Please создаёт или обновляет Release PR с очередной версией и changelog. Проверьте этот PR и влейте его, когда релиз готов. Release Please создаёт тег `vX.Y.Z` и draft GitHub Release; GoReleaser прикрепляет архивы и `checksums.txt`; workflow публикует через `gh release edit --draft=false`. Вручную теги релиза не создавайте.
 
 Пока tgc ниже `v1.0.0`, breaking changes выпускаются как следующая версия `0.x.0`. Переход на `v1.0.0` - отдельное решение мейнтейнера, а не автоматическое следствие `feat!`.
 ```
@@ -435,7 +437,7 @@ Run:
 
 ```bash
 sh scripts/check-release-config.sh
-docker run --rm -v "$PWD":/work -w /work goreleaser/goreleaser:v2 check --config .goreleaser.yaml
+docker run --rm -v "$PWD":/work -w /work goreleaser/goreleaser:v2.12.7 check --config .goreleaser.yaml
 go build ./...
 go vet ./...
 go test ./...
@@ -469,7 +471,7 @@ git commit -m "docs: explain automated release process"
 - Use the established Release Please plus GoReleaser pattern in one workflow, with dependent jobs rather than separate workflows.
 - Keep the repository's existing action-major-tag convention. SHA-pinning all Actions with Dependabot is a separate security migration, not scope for this release P0.
 - Add a `verify` job before Release Please. A release tag must never be created before build, vet, test, and shellcheck pass on the Release PR merge commit.
-- Keep GoReleaser as the sole GitHub Release publisher, using an unpublished draft plus retry-safe asset replacement.
+- Release Please creates the draft GitHub Release; GoReleaser attaches assets with retry-safe replacement; the workflow flips draft→published only after assets succeed.
 - Configure required CI and squash merge in GitHub repository settings. The codebase validates PR title syntax; repository settings enforce which CI status must pass and which merge button is available.
 
 ### Changes Made

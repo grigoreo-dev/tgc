@@ -22,23 +22,31 @@ was rejected.
 Use one GitHub Actions release workflow (`.github/workflows/release.yml`) with
 ordered jobs:
 
-1. **`verify`** — `go build` / `vet` / `test` and `shellcheck install.sh` on the
-   merge commit (and on manual retry).
+1. **`verify`** — `go build` / `vet` / `test` and `shellcheck install.sh`. On
+   `push` to `main`, checks out the merge commit (`github.sha`). On
+   `workflow_dispatch`, checks out the **validated** tag from `validate-retry`
+   (regex-gated; raw `inputs.tag_name` is never interpolated into shell).
 2. **Release Please** (push to `main` only) — maintains a Release PR and
    `CHANGELOG.md`, calculates the next version from Conventional Commits, and on
    Release PR merge creates the `vX.Y.Z` git tag **and** a **draft** GitHub
    Release (`draft: true`, `force-tag-creation: true` in
-   `release-please-config.json`). Do **not** set `skip-github-release`.
+   `release-please-config.json`). Root package is **componentless** (no
+   `"component"` field) so tags/branches stay plain `vX.Y.Z`. Root
+   `group-pull-request-title-pattern` includes `${version}` so grouped Release
+   PR titles remain parseable on merge. Do **not** set `skip-github-release`.
 3. **GoReleaser** — runs when `release_created` is true (or on
-   `workflow_dispatch` with an existing `tag_name`). Checks out the tag,
+   `workflow_dispatch` with an existing draft `tag_name`). Checks out the tag,
    uploads/replaces archives and `checksums.txt` on the **existing** draft
    (`use_existing_draft`, `replace_existing_artifacts`, `mode: keep-existing`),
    with GoReleaser changelog scraping disabled.
 4. **Publish** — `gh release edit "$TAG" --draft=false` only after assets
    succeed.
 
-Manual tag pushes are not the release path. Rebuild of an existing draft uses
-**Actions → Release → Run workflow** with `tag_name` (no Release Please).
+Manual tag pushes are not the release path. Rebuild of an existing draft that
+is **not yet published** uses **Actions → Release → Run workflow** with
+`tag_name` (no Release Please). Rapid `main` pushes are serialized via workflow
+`concurrency` with `cancel-in-progress: false` so a publishing run is not
+cancelled.
 
 While tgc remains below `v1.0.0`, `feat!` / `BREAKING CHANGE` produce the next
 `0.x.0` via `bump-minor-pre-major`. Shipping `v1.0.0` requires an explicit
@@ -68,5 +76,6 @@ does not ship an empty release.
   PRs does not block merge (settings/rulesets; not workflow YAML).
 - The first automated release is based on `v0.1.1` and benefits from a dry-run
   review of accumulated commits before relying on production publish.
-- A failed artifact publication is retried against the same tag and draft
-  release; a second version is not created merely to retry the build.
+- A failed artifact publication is retried against the same tag and **draft**
+  release (not yet published); a second version is not created merely to retry
+  the build.

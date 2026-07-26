@@ -322,7 +322,8 @@ by hand.
 
 On merge of the Release PR, the release workflow:
 
-1. Runs build, vet, test, and `install.sh` shellcheck (`verify`).
+1. Runs build, vet, test, and `install.sh` shellcheck (`verify`) on the merge
+   commit on `main`.
 2. Lets Release Please create the `vX.Y.Z` git tag and a **draft** GitHub
    Release (notes/body from the generated changelog).
 3. Runs GoReleaser against that tag to attach archives and `checksums.txt` to
@@ -330,9 +331,11 @@ On merge of the Release PR, the release workflow:
 4. Publishes the release with `gh release edit … --draft=false` only after
    assets succeed.
 
-To rebuild assets for an existing draft without re-running Release Please, use
-**Actions → Release → Run workflow** and pass the existing `tag_name`
-(for example `v0.2.0`).
+To rebuild assets for an existing draft that is **not yet published**, without
+re-running Release Please, use **Actions → Release → Run workflow** and pass
+the existing `tag_name` (for example `v0.2.0`). That path validates the tag,
+checks out **that tag** for `verify` and GoReleaser, then republishes the same
+draft after assets succeed. Do not use it for already-published releases.
 
 While tgc is below `v1.0.0`, breaking changes release the next `0.x.0` version
 (`bump-minor-pre-major`). **`v1.0.0` is an explicit maintainer decision**, not
