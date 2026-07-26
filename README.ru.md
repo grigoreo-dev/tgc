@@ -325,7 +325,7 @@ squash merge и Conventional Commit в заголовке обычного PR:
 создаёт или обновляет **Release PR** с очередной версией и changelog. Проверьте
 этот PR и влейте его, когда релиз готов — вручную теги релиза не создавайте.
 
-После merge Release PR release-workflow:
+После merge Release PR workflow релиза:
 
 1. Прогоняет build, vet, test и shellcheck для `install.sh` (`verify`).
 2. Через Release Please создаёт git-тег `vX.Y.Z` и **черновик** (draft) GitHub
@@ -371,6 +371,8 @@ docker run --rm -v "$PWD":/work -w /work goreleaser/goreleaser:v2.12.7 check --c
 
 Для `check` используйте конкретный тег образа GoReleaser, например `v2.12.7`;
 плавающий тег `goreleaser/goreleaser:v2` не опубликован.
+
+### Трекинг задач через beads (`bd`)
 
 Задачи в этом репозитории отслеживаются с помощью
 [beads](https://github.com/gastownhall/beads) (`bd`) — git-нативного трекера с
