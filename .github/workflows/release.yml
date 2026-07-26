@@ -3,12 +3,34 @@ name: Release
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing draft release tag to rebuild and publish (e.g. v1.2.3)
+        required: true
+        type: string
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  validate-retry:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.validate.outputs.tag_name }}
+    steps:
+      - id: validate
+        env:
+          TAG: ${{ inputs.tag_name }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "tag_name must match ^v[0-9]+\.[0-9]+\.[0-9]+$" >&2
+            exit 1
+          fi
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+
   verify:
     runs-on: ubuntu-latest
     permissions:
@@ -24,6 +46,7 @@ jobs:
       - run: shellcheck install.sh
 
   release-please:
+    if: github.event_name == 'push'
     needs: verify
     runs-on: ubuntu-latest
     outputs:
@@ -39,14 +62,20 @@ jobs:
           target-branch: main
 
   goreleaser:
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    needs: [verify, validate-retry, release-please]
+    if: |
+      always() &&
+      needs.verify.result == 'success' &&
+      (
+        (github.event_name == 'push' && needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') ||
+        (github.event_name == 'workflow_dispatch' && needs.validate-retry.result == 'success')
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ needs.validate-retry.outputs.tag_name || needs.release-please.outputs.tag_name }}
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
@@ -60,4 +89,5 @@ jobs:
       - name: Publish completed release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ needs.release-please.outputs.tag_name }}" --draft=false
+          TAG_NAME: ${{ needs.validate-retry.outputs.tag_name || needs.release-please.outputs.tag_name }}
+        run: gh release edit "$TAG_NAME" --draft=false

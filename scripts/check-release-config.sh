@@ -32,13 +32,25 @@ if grep -Fq "tags: ['v*.*.*']" "$workflow"; then
   echo "release workflow must not use the old tag trigger" >&2
   exit 1
 fi
+if grep -Fq 'command: manifest' "$workflow"; then
+  echo "command: manifest is invalid for release-please-action@v5; use config/manifest files only" >&2
+  exit 1
+fi
+if grep -Fq 'skip-github-release' "$workflow"; then
+  echo "skip-github-release must not appear in release workflow" >&2
+  exit 1
+fi
+grep -F 'workflow_dispatch:' "$workflow" >/dev/null
+grep -F 'tag_name:' "$workflow" >/dev/null
+grep -F '  validate-retry:' "$workflow" >/dev/null
+grep -F '^v[0-9]+\.[0-9]+\.[0-9]+$' "$workflow" >/dev/null
 grep -F '  verify:' "$workflow" >/dev/null
 grep -F 'needs: verify' "$workflow" >/dev/null
 grep -F 'googleapis/release-please-action@v5' "$workflow" >/dev/null
 grep -F 'release_created:' "$workflow" >/dev/null
-grep -F 'tag_name:' "$workflow" >/dev/null
 grep -F "needs.release-please.outputs.release_created == 'true'" "$workflow" >/dev/null
-grep -F 'ref: ${{ needs.release-please.outputs.tag_name }}' "$workflow" >/dev/null
+grep -F 'needs.validate-retry.outputs.tag_name || needs.release-please.outputs.tag_name' "$workflow" >/dev/null
+grep -F 'github.event_name == '\''workflow_dispatch'\''' "$workflow" >/dev/null
 grep -F 'gh release edit' "$workflow" >/dev/null
 grep -F -- '--draft=false' "$workflow" >/dev/null
 grep -F 'draft: true' "$goreleaser" >/dev/null
