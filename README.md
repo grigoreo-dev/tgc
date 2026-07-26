@@ -306,6 +306,63 @@ it needs credentials and dedicated throwaway accounts. See
 [scripts/e2e/README.md](scripts/e2e/README.md) for preconditions and how to run
 `scripts/e2e/run-all.sh`.
 
+### Releases
+
+Release versions and `CHANGELOG.md` are generated from
+[Conventional Commits](https://www.conventionalcommits.org/). Use squash merge
+and give ordinary PRs a title such as `fix: handle empty chat`,
+`feat: add search`, or `feat(cli)!: change the output contract`. CI rejects
+other titles on human PRs (`conventional-commit-title`); Release Please bot
+PRs skip that job.
+
+After releasable commits reach `main`, [Release Please](https://github.com/googleapis/release-please)
+opens or updates a **Release PR** with the next version and changelog. Review
+that PR, then merge it when the release is ready — do not create release tags
+by hand.
+
+On merge of the Release PR, the release workflow:
+
+1. Runs build, vet, test, and `install.sh` shellcheck (`verify`).
+2. Lets Release Please create the `vX.Y.Z` git tag and a **draft** GitHub
+   Release (notes/body from the generated changelog).
+3. Runs GoReleaser against that tag to attach archives and `checksums.txt` to
+   the existing draft (retry-safe replace).
+4. Publishes the release with `gh release edit … --draft=false` only after
+   assets succeed.
+
+To rebuild assets for an existing draft without re-running Release Please, use
+**Actions → Release → Run workflow** and pass the existing `tag_name`
+(for example `v0.2.0`).
+
+While tgc is below `v1.0.0`, breaking changes release the next `0.x.0` version
+(`bump-minor-pre-major`). **`v1.0.0` is an explicit maintainer decision**, not
+an automatic consequence of a breaking-change commit.
+
+**Repository settings (maintainer / admin, not enforced by workflow YAML):**
+
+1. **Squash merge** — Settings → General → Pull Requests: enable squash
+   merging; prefer defaulting the squash commit message to the PR title so
+   validated titles become the commits Release Please reads.
+2. **Required checks on `main`** — branch protection or ruleset: require status
+   checks before merge; include at least `test`, `lint`, and
+   `conventional-commit-title`; prefer requiring branches to be up to date.
+3. **Skipped title job on Release Please PRs** — `conventional-commit-title`
+   is skipped for `release-please[bot]` (GitHub shows **Skipped**, not Failed).
+   Confirm the protection/ruleset treats Skipped as non-blocking for that
+   check, or add an automation exemption / ruleset path that does not block
+   bot Release PRs solely because the title job was skipped. Verify once on a
+   live Release Please PR before relying on the merge button.
+
+Local release-config contract (no credentials, no publish):
+
+```sh
+sh scripts/check-release-config.sh
+docker run --rm -v "$PWD":/work -w /work goreleaser/goreleaser:v2.12.7 check --config .goreleaser.yaml
+```
+
+Use a concrete GoReleaser image tag such as `v2.12.7` for `check`; the floating
+tag `goreleaser/goreleaser:v2` is not a published image.
+
 ### Issue tracking with beads (`bd`)
 
 This repo tracks work with [beads](https://github.com/gastownhall/beads) (`bd`),

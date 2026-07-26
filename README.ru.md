@@ -311,7 +311,66 @@ JSONL в stdout, структурированные ошибки в stderr. Из
 запускает — нужны учётные данные и отдельные одноразовые аккаунты. Предпосылки и
 запуск `scripts/e2e/run-all.sh` — см. [scripts/e2e/README.md](scripts/e2e/README.md).
 
-### Трекинг задач через beads (`bd`)
+### Релизы
+
+Версия релиза и `CHANGELOG.md` формируются из
+[Conventional Commits](https://www.conventionalcommits.org/). Используйте
+squash merge и Conventional Commit в заголовке обычного PR:
+`fix: handle empty chat`, `feat: add search` или
+`feat(cli)!: change the output contract`. CI отклоняет другие заголовки на
+человеческих PR (`conventional-commit-title`); PR бота Release Please эту
+проверку пропускают.
+
+После появления релизных коммитов в `main` [Release Please](https://github.com/googleapis/release-please)
+создаёт или обновляет **Release PR** с очередной версией и changelog. Проверьте
+этот PR и влейте его, когда релиз готов — вручную теги релиза не создавайте.
+
+После merge Release PR release-workflow:
+
+1. Прогоняет build, vet, test и shellcheck для `install.sh` (`verify`).
+2. Через Release Please создаёт git-тег `vX.Y.Z` и **черновик** (draft) GitHub
+   Release (тело/заметки из сгенерированного changelog).
+3. Запускает GoReleaser на этом теге: прикрепляет архивы и `checksums.txt` к
+   уже существующему draft (с безопасной заменой артефактов при повторе).
+4. Публикует релиз командой `gh release edit … --draft=false` только после
+   успешной загрузки ассетов.
+
+Чтобы пересобрать ассеты для существующего draft без повторного запуска
+Release Please, откройте **Actions → Release → Run workflow** и укажите
+существующий `tag_name` (например `v0.2.0`).
+
+Пока tgc ниже `v1.0.0`, breaking changes выпускаются как следующая версия
+`0.x.0` (`bump-minor-pre-major`). **Переход на `v1.0.0` — отдельное решение
+мейнтейнера**, а не автоматическое следствие `feat!`.
+
+**Настройки репозитория (мейнтейнер / администратор; workflow YAML это не
+навязывает):**
+
+1. **Squash merge** — Settings → General → Pull Requests: включите squash
+   merging; предпочтительно сообщение squash-коммита по умолчанию = заголовок
+   PR, чтобы проверенные заголовки становились коммитами, которые читает
+   Release Please.
+2. **Обязательные проверки на `main`** — branch protection или ruleset:
+   требовать прохождение status checks перед merge; как минимум `test`,
+   `lint` и `conventional-commit-title`; желательно «require branches to be
+   up to date».
+3. **Пропуск title-job на PR Release Please** — `conventional-commit-title`
+   пропускается для `release-please[bot]` (в GitHub статус **Skipped**, не
+   Failed). Убедитесь, что protection/ruleset считает Skipped
+   неблокирующим для этой проверки, либо настройте exemption для автоматики /
+   ruleset, который не блокирует bot Release PR только из‑за пропуска title
+   job. Один раз проверьте на живом Release Please PR, что кнопка merge не
+   заблокирована только из‑за skipped check.
+
+Локальная проверка контракта релиза (без credentials и без публикации):
+
+```sh
+sh scripts/check-release-config.sh
+docker run --rm -v "$PWD":/work -w /work goreleaser/goreleaser:v2.12.7 check --config .goreleaser.yaml
+```
+
+Для `check` используйте конкретный тег образа GoReleaser, например `v2.12.7`;
+плавающий тег `goreleaser/goreleaser:v2` не опубликован.
 
 Задачи в этом репозитории отслеживаются с помощью
 [beads](https://github.com/gastownhall/beads) (`bd`) — git-нативного трекера с

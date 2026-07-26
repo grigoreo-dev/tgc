@@ -71,3 +71,21 @@ grep -F '^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?!:' 
 # Failure UX: print expected format before non-zero exit.
 grep -F 'error: PR title must be a Conventional Commit' "$ci" >/dev/null
 grep -F 'expected: type(scope)!: subject' "$ci" >/dev/null
+
+# Contributor docs must describe the automated release process (Task 4).
+grep -F 'Release Please' README.md >/dev/null
+grep -F 'Release PR' README.md >/dev/null
+grep -F 'Conventional Commits' README.md >/dev/null
+grep -F 'Release Please' README.ru.md >/dev/null
+grep -F 'Release PR' README.ru.md >/dev/null
+# Correct ownership: RP creates tag + draft release; GoReleaser attaches assets; gh publishes.
+grep -F 'draft' README.md >/dev/null
+grep -F 'GoReleaser' README.md >/dev/null
+grep -F 'v1.0.0' README.md >/dev/null
+grep -F 'squash' README.md >/dev/null
+grep -F 'conventional-commit-title' README.md >/dev/null
+grep -F 'draft' README.ru.md >/dev/null
+grep -F 'GoReleaser' README.ru.md >/dev/null
+grep -F 'v1.0.0' README.ru.md >/dev/null
+grep -F 'squash' README.ru.md >/dev/null
+grep -F 'conventional-commit-title' README.ru.md >/dev/null
