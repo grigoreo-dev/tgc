@@ -1,0 +1,12 @@
+{
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "component": "tgc",
+      "include-v-in-tag": true,
+      "tag-separator": "",
+      "bump-minor-pre-major": true,
+      "skip-github-release": true
+    }
+  }
+}
