@@ -4,7 +4,7 @@
 
 **Goal:** Automate pre-1.0 SemVer selection and `CHANGELOG.md` maintenance from Conventional Commits, while a reviewed Release PR triggers a GoReleaser-published tgc release in one GitHub Actions workflow.
 
-**Architecture:** `.github/workflows/release.yml` runs Release Please on every push to `main`; its outputs conditionally start a dependent GoReleaser job in the same workflow run. Release Please owns the Release PR, version manifest, changelog, and tag, while GoReleaser exclusively creates the draft GitHub Release and uploads binaries and checksums. A CI PR-title job guarantees that squash-merged commits provide valid Conventional Commit input.
+**Architecture:** `.github/workflows/release.yml` verifies every push to `main`, then runs Release Please; its outputs conditionally start a dependent GoReleaser job in the same workflow run. Release Please owns the Release PR, version manifest, changelog, and tag, while GoReleaser exclusively creates the draft GitHub Release and uploads binaries and checksums. A CI PR-title job guarantees that squash-merged commits provide valid Conventional Commit input.
 
 **Tech Stack:** GitHub Actions, `googleapis/release-please-action`, Release Please manifest JSON, GoReleaser v2, Go 1.25, shellcheck, `go test`.
 
@@ -22,7 +22,7 @@
 
 ## File Structure
 
-- Modify: `.github/workflows/release.yml` - replace the tag-triggered workflow with ordered Release Please and GoReleaser jobs.
+- Modify: `.github/workflows/release.yml` - replace the tag-triggered workflow with verify, Release Please, and GoReleaser jobs.
 - Modify: `.github/workflows/ci.yml` - validate non-bot PR titles before merge.
 - Create: `release-please-config.json` - root component release policy and GitHub Release ownership.
 - Create: `.release-please-manifest.json` - baseline version for the repository root.
@@ -163,6 +163,7 @@ git commit -m "chore(release): add release please metadata"
 
 **Acceptance Criteria:**
 - Only one workflow file manages release creation and is triggered on pushes to `main`.
+- Build, vet, test, and `install.sh` shellcheck complete successfully before Release Please can create a tag.
 - GoReleaser runs only when Release Please reports a new release, checks out the exact `tag_name`, and has full tag history.
 - A workflow retry reuses a draft release and replaces conflicting assets rather than producing a second version.
 - Release notes come from the Release Please-maintained changelog rather than GoReleaser's commit scraper.
@@ -176,6 +177,8 @@ workflow=.github/workflows/release.yml
 goreleaser=.goreleaser.yaml
 
 grep -F 'branches: [main]' "$workflow" >/dev/null
+grep -F '  verify:' "$workflow" >/dev/null
+grep -F 'needs: verify' "$workflow" >/dev/null
 grep -F 'googleapis/release-please-action@v5' "$workflow" >/dev/null
 grep -F 'release_created:' "$workflow" >/dev/null
 grep -F 'tag_name:' "$workflow" >/dev/null
@@ -208,7 +211,22 @@ permissions:
   pull-requests: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+      - run: shellcheck install.sh
+
   release-please:
+    needs: verify
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -443,3 +461,27 @@ Expected: dry-run reports a root release proposal based on `0.1.1`, retains the 
 git add README.md README.ru.md scripts/check-release-config.sh
 git commit -m "docs: explain automated release process"
 ```
+
+## Stress Test Results: automated release implementation plan
+
+### Resolved Decisions
+
+- Use the established Release Please plus GoReleaser pattern in one workflow, with dependent jobs rather than separate workflows.
+- Keep the repository's existing action-major-tag convention. SHA-pinning all Actions with Dependabot is a separate security migration, not scope for this release P0.
+- Add a `verify` job before Release Please. A release tag must never be created before build, vet, test, and shellcheck pass on the Release PR merge commit.
+- Keep GoReleaser as the sole GitHub Release publisher, using an unpublished draft plus retry-safe asset replacement.
+- Configure required CI and squash merge in GitHub repository settings. The codebase validates PR title syntax; repository settings enforce which CI status must pass and which merge button is available.
+
+### Changes Made
+
+- Added an explicit pre-tag verification job to the unified workflow plan.
+- Deferred action SHA-pinning so the P0 follows the current repository convention and stays focused on release automation.
+
+### Deferred / Parking Lot
+
+- SHA-pinning all Actions with Dependabot, artifact signing/attestations, prerelease channels, and an explicit `v1.0.0` launch decision.
+
+### Confidence Assessment
+
+- Overall: High.
+- Areas of concern: review the first Release Please dry-run before merging the workflow, then enable required CI and squash merge in GitHub repository settings.
