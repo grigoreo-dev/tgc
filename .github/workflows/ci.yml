@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -40,4 +41,13 @@ jobs:
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
-          printf '%s' "$TITLE" | grep -Eq '^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?!: .+|^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?: .+'
+          re='^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?!: .+|^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?: .+'
+          if printf '%s' "$TITLE" | grep -Eq "$re"; then
+            exit 0
+          fi
+          echo "error: PR title must be a Conventional Commit" >&2
+          echo "got: ${TITLE}" >&2
+          echo "expected: type(scope)!: subject" >&2
+          echo "examples: feat: add feature | feat(cli): add flag | fix!: breaking fix | feat(api)!: break api" >&2
+          echo "types: feat fix deps docs chore test refactor perf build ci" >&2
+          exit 1

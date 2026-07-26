@@ -62,5 +62,12 @@ grep -F 'disable: true' "$goreleaser" >/dev/null
 ci=.github/workflows/ci.yml
 grep -F 'conventional-commit-title:' "$ci" >/dev/null
 grep -F 'release-please[bot]' "$ci" >/dev/null
+# Re-run title validation when the PR title is edited (not only on code push).
+grep -F 'types: [opened, synchronize, reopened, edited]' "$ci" >/dev/null
+# Job skips non-PR events and Release Please bot PRs (do not weaken without decision).
+grep -F "github.event_name == 'pull_request' && github.event.pull_request.user.login != 'release-please[bot]'" "$ci" >/dev/null
 # Needle matches the workflow run-step ERE (single-backslash scope group).
 grep -F '^(feat|fix|deps|docs|chore|test|refactor|perf|build|ci)(\([^)]+\))?!:' "$ci" >/dev/null
+# Failure UX: print expected format before non-zero exit.
+grep -F 'error: PR title must be a Conventional Commit' "$ci" >/dev/null
+grep -F 'expected: type(scope)!: subject' "$ci" >/dev/null
