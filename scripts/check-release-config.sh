@@ -76,6 +76,8 @@ if [ "$(printf '%s\n' "$tag_input_lines" | wc -l)" -ne 1 ]; then
   exit 1
 fi
 grep -F 'needs: verify' "$workflow" >/dev/null
+grep -F "github.event_name == 'push'" "$workflow" >/dev/null
+grep -F "needs.verify.result == 'success'" "$workflow" >/dev/null
 grep -F 'googleapis/release-please-action@v5' "$workflow" >/dev/null
 grep -F 'release_created:' "$workflow" >/dev/null
 grep -F "needs.release-please.outputs.release_created == 'true'" "$workflow" >/dev/null
